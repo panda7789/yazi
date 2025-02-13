@@ -553,6 +553,21 @@ checksum = "829d955a0bb380ef178a640b91779e3987da38c9aea133b20614cfed8cdea9c6"
 dependencies = [
  "bitflags 2.9.0",
  "crossterm_winapi",
+ "mio",
+ "parking_lot",
+ "rustix",
+ "signal-hook",
+ "signal-hook-mio",
+ "winapi",
+]
+
+[[package]]
+name = "crossterm"
+version = "0.28.1"
+source = "git+https://github.com/Geobert/crossterm?branch=fix-windows-altgr#e61620022f59adf98508727baec1aaec91bc55a1"
+dependencies = [
+ "bitflags 2.8.0",
+ "crossterm_winapi",
  "filedescriptor",
  "futures-core",
  "libc",
@@ -2042,7 +2057,7 @@ dependencies = [
  "bitflags 2.9.0",
  "cassowary",
  "compact_str",
- "crossterm",
+ "crossterm 0.28.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "indoc",
  "instability",
  "itertools 0.13.0",
@@ -3327,7 +3342,8 @@ dependencies = [
  "anyhow",
  "base64",
  "color_quant",
- "crossterm",
+ "crossterm 0.28.1 (git+https://github.com/Geobert/crossterm?branch=fix-windows-altgr)",
+ "futures",
  "image",
  "libc",
  "ratatui",
@@ -3367,7 +3383,7 @@ dependencies = [
  "clap_complete",
  "clap_complete_fig",
  "clap_complete_nushell",
- "crossterm",
+ "crossterm 0.28.1 (git+https://github.com/Geobert/crossterm?branch=fix-windows-altgr)",
  "serde",
  "serde_json",
  "tokio",
@@ -3395,7 +3411,7 @@ version = "25.3.2"
 dependencies = [
  "anyhow",
  "bitflags 2.9.0",
- "crossterm",
+ "crossterm 0.28.1 (git+https://github.com/Geobert/crossterm?branch=fix-windows-altgr)",
  "globset",
  "indexmap",
  "ratatui",
@@ -3415,7 +3431,7 @@ version = "25.3.2"
 dependencies = [
  "anyhow",
  "bitflags 2.9.0",
- "crossterm",
+ "crossterm 0.28.1 (git+https://github.com/Geobert/crossterm?branch=fix-windows-altgr)",
  "dirs",
  "futures",
  "indexmap",
@@ -3481,7 +3497,7 @@ version = "25.3.2"
 dependencies = [
  "anyhow",
  "better-panic",
- "crossterm",
+ "crossterm 0.28.1 (git+https://github.com/Geobert/crossterm?branch=fix-windows-altgr)",
  "fdlimit",
  "futures",
  "indexmap",
@@ -3549,7 +3565,7 @@ dependencies = [
  "anyhow",
  "base64",
  "clipboard-win",
- "crossterm",
+ "crossterm 0.28.1 (git+https://github.com/Geobert/crossterm?branch=fix-windows-altgr)",
  "futures",
  "globset",
  "md-5",
@@ -3623,7 +3639,7 @@ name = "yazi-shared"
 version = "25.3.2"
 dependencies = [
  "anyhow",
- "crossterm",
+ "crossterm 0.28.1 (git+https://github.com/Geobert/crossterm?branch=fix-windows-altgr)",
  "futures",
  "libc",
  "memchr",
