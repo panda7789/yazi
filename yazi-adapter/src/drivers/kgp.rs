@@ -321,22 +321,22 @@ impl Kgp {
 
 		Adapter::Kgp.image_hide()?;
 		Adapter::shown_store(area);
-		Emulator::move_lock((area.x, area.y), |stderr| {
-			stderr.write_all(&b1)?;
-			stderr.write_all(&b2)?;
+		Emulator::move_lock((area.x, area.y), |w| {
+			w.write_all(&b1)?;
+			w.write_all(&b2)?;
 			Ok(area)
 		})
 	}
 
 	pub(crate) fn image_erase(area: Rect) -> Result<()> {
 		let s = " ".repeat(area.width as usize);
-		Emulator::move_lock((0, 0), |stderr| {
+		Emulator::move_lock((0, 0), |w| {
 			for y in area.top()..area.bottom() {
-				queue!(stderr, MoveTo(area.x, y))?;
-				write!(stderr, "{s}")?;
+				queue!(w, MoveTo(area.x, y))?;
+				write!(w, "{s}")?;
 			}
 
-			write!(stderr, "{START}_Gq=2,a=d,d=A{ESCAPE}\\{CLOSE}")?;
+			write!(w, "{START}_Gq=2,a=d,d=A{ESCAPE}\\{CLOSE}")?;
 			Ok(())
 		})
 	}
@@ -379,14 +379,14 @@ impl Kgp {
 
 	fn place(area: &Rect) -> Result<Vec<u8>> {
 		let mut buf = Vec::with_capacity(area.width as usize * area.height as usize * 3 + 50);
+		write!(buf, "\x1b[38;2;0;0;1m")?;
 		for y in 0..area.height {
-			write!(buf, "\x1b[{};{}H\x1b[38;5;1m", area.y + y + 1, area.x + 1)?;
+			write!(buf, "\x1b[{};{}H", area.y + y + 1, area.x + 1)?;
 			for x in 0..area.width {
 				write!(buf, "\u{10EEEE}")?;
 				write!(buf, "{}", *DIACRITICS.get(y as usize).unwrap_or(&DIACRITICS[0]))?;
 				write!(buf, "{}", *DIACRITICS.get(x as usize).unwrap_or(&DIACRITICS[0]))?;
 			}
-			write!(buf, "\x1b[0m")?;
 		}
 		Ok(buf)
 	}

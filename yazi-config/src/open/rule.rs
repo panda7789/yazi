@@ -5,12 +5,11 @@ use serde::{Deserialize, Deserializer, de::{self, Visitor}};
 use crate::pattern::Pattern;
 
 #[derive(Debug, Deserialize)]
-pub(super) struct OpenRule {
-	pub(super) name: Option<Pattern>,
-	pub(super) mime: Option<Pattern>,
-	#[serde(rename = "use")]
+pub struct OpenRule {
+	pub name:  Option<Pattern>,
+	pub mime:  Option<Pattern>,
 	#[serde(deserialize_with = "OpenRule::deserialize")]
-	pub(super) use_: Vec<String>,
+	pub r#use: Vec<String>,
 }
 
 impl OpenRule {
@@ -39,7 +38,7 @@ impl OpenRule {
 			where
 				A: de::SeqAccess<'de>,
 			{
-				let mut uses = vec![];
+				let mut uses = Vec::with_capacity(seq.size_hint().unwrap_or(0));
 				while let Some(use_) = seq.next_element::<String>()? {
 					uses.push(use_);
 				}

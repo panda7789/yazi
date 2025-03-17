@@ -1,7 +1,8 @@
-use std::{borrow::Cow, collections::HashMap};
+use std::{any::TypeId, borrow::Cow, collections::HashMap};
 
-use mlua::{ExternalError, Lua, MultiValue, Table, Value};
-use yazi_shared::{OrderedFloat, event::{Data, DataKey}, replace_cow};
+use mlua::{ExternalError, IntoLua, Lua, MultiValue, Table, Value};
+use ordered_float::OrderedFloat;
+use yazi_shared::{event::{Data, DataKey}, replace_cow};
 
 pub struct Sendable;
 
@@ -15,7 +16,7 @@ impl Sendable {
 			Value::Number(n) => Data::Number(n),
 			Value::String(b) => {
 				if let Ok(s) = b.to_str() {
-					Data::String(s.to_owned())
+					Data::String(s.to_owned().into())
 				} else {
 					Data::Bytes(b.as_bytes().to_owned())
 				}
@@ -40,15 +41,24 @@ impl Sendable {
 			}
 			Value::Function(_) => Err("function is not supported".into_lua_err())?,
 			Value::Thread(_) => Err("thread is not supported".into_lua_err())?,
-			Value::UserData(ud) => {
-				if let Ok(t) = ud.take::<yazi_shared::url::Url>() {
-					Data::Url(t)
-				} else if let Ok(t) = ud.take::<super::body::BodyYankIter>() {
-					Data::Any(Box::new(t))
-				} else {
-					Err("unsupported userdata included".into_lua_err())?
+			Value::UserData(ud) => match ud.type_id() {
+				Some(t) if t == TypeId::of::<yazi_binding::Url>() => {
+					Data::Url(ud.take::<yazi_binding::Url>()?.into())
 				}
-			}
+				Some(t) if t == TypeId::of::<yazi_binding::Urn>() => {
+					Data::Urn(ud.take::<yazi_binding::Urn>()?.into())
+				}
+				Some(t) if t == TypeId::of::<yazi_binding::Id>() => {
+					Data::Id(**ud.borrow::<yazi_binding::Id>()?)
+				}
+				Some(t) if t == TypeId::of::<yazi_fs::FilesOp>() => {
+					Data::Any(Box::new(ud.take::<yazi_fs::FilesOp>()?))
+				}
+				Some(t) if t == TypeId::of::<super::body::BodyYankIter>() => {
+					Data::Any(Box::new(ud.take::<super::body::BodyYankIter>()?))
+				}
+				_ => Err(format!("unsupported userdata included: {ud:?}").into_lua_err())?,
+			},
 			Value::Error(_) => Err("error is not supported".into_lua_err())?,
 			Value::Other(..) => Err("unknown data is not supported".into_lua_err())?,
 		})
@@ -71,14 +81,15 @@ impl Sendable {
 				}
 				Value::Table(tbl)
 			}
-			Data::Url(u) => Value::UserData(lua.create_any_userdata(u)?),
-			Data::Any(a) => {
-				if let Ok(t) = a.downcast::<super::body::BodyYankIter>() {
-					Value::UserData(lua.create_userdata(*t)?)
-				} else {
-					Err("unsupported userdata included".into_lua_err())?
-				}
-			}
+			Data::Url(u) => yazi_binding::Url::new(u).into_lua(lua)?,
+			Data::Urn(u) => yazi_binding::Urn::new(u).into_lua(lua)?,
+			Data::Any(a) => Value::UserData(if a.is::<yazi_fs::FilesOp>() {
+				lua.create_any_userdata(*a.downcast::<yazi_fs::FilesOp>().unwrap())?
+			} else if a.is::<super::body::BodyYankIter>() {
+				lua.create_userdata(*a.downcast::<super::body::BodyYankIter>().unwrap())?
+			} else {
+				Err("unsupported Data::Any included".into_lua_err())?
+			}),
 			data => Self::data_to_value_ref(lua, &data)?,
 		})
 	}
@@ -89,7 +100,7 @@ impl Sendable {
 			Data::Boolean(b) => Value::Boolean(*b),
 			Data::Integer(i) => Value::Integer(*i),
 			Data::Number(n) => Value::Number(*n),
-			Data::String(s) => Value::String(lua.create_string(s)?),
+			Data::String(s) => Value::String(lua.create_string(s.as_ref())?),
 			Data::List(l) => {
 				let mut vec = Vec::with_capacity(l.len());
 				for v in l {
@@ -105,15 +116,17 @@ impl Sendable {
 				}
 				Value::Table(tbl)
 			}
-			Data::Url(u) => Value::UserData(lua.create_any_userdata(u.clone())?),
+			Data::Id(i) => yazi_binding::Id(*i).into_lua(lua)?,
+			Data::Url(u) => yazi_binding::Url::new(u.clone()).into_lua(lua)?,
+			Data::Urn(u) => yazi_binding::Urn::new(u.clone()).into_lua(lua)?,
 			Data::Bytes(b) => Value::String(lua.create_string(b)?),
-			Data::Any(a) => {
-				if let Some(t) = a.downcast_ref::<super::body::BodyYankIter>() {
-					Value::UserData(lua.create_userdata(t.clone())?)
-				} else {
-					Err("unsupported userdata included".into_lua_err())?
-				}
-			}
+			Data::Any(a) => Value::UserData(if let Some(t) = a.downcast_ref::<yazi_fs::FilesOp>() {
+				lua.create_any_userdata(t.clone())?
+			} else if let Some(t) = a.downcast_ref::<super::body::BodyYankIter>() {
+				lua.create_userdata(t.clone())?
+			} else {
+				Err("unsupported Data::Any included".into_lua_err())?
+			}),
 		})
 	}
 
@@ -166,19 +179,11 @@ impl Sendable {
 	}
 
 	pub fn list_to_values(lua: &Lua, data: Vec<Data>) -> mlua::Result<MultiValue> {
-		let mut vec = Vec::with_capacity(data.len());
-		for v in data {
-			vec.push(Self::data_to_value(lua, v)?);
-		}
-		Ok(MultiValue::from_vec(vec))
+		data.into_iter().map(|d| Self::data_to_value(lua, d)).collect()
 	}
 
 	pub fn values_to_list(values: MultiValue) -> mlua::Result<Vec<Data>> {
-		let mut vec = Vec::with_capacity(values.len());
-		for value in values {
-			vec.push(Self::value_to_data(value)?);
-		}
-		Ok(vec)
+		values.into_iter().map(Self::value_to_data).collect()
 	}
 }
 
@@ -186,31 +191,44 @@ impl Sendable {
 	fn value_to_key(value: Value) -> mlua::Result<DataKey> {
 		Ok(match value {
 			Value::Nil => DataKey::Nil,
-			Value::Boolean(v) => DataKey::Boolean(v),
+			Value::Boolean(b) => DataKey::Boolean(b),
 			Value::LightUserData(_) => Err("light userdata is not supported".into_lua_err())?,
-			Value::Integer(v) => DataKey::Integer(v),
-			Value::Number(v) => DataKey::Number(OrderedFloat::new(v)),
-			Value::String(v) => DataKey::String(Cow::Owned(v.to_str()?.to_owned())),
+			Value::Integer(i) => DataKey::Integer(i),
+			Value::Number(n) => DataKey::Number(OrderedFloat(n)),
+			Value::String(s) => {
+				if let Ok(s) = s.to_str() {
+					DataKey::String(s.to_owned().into())
+				} else {
+					DataKey::Bytes(s.as_bytes().to_owned())
+				}
+			}
 			Value::Table(_) => Err("table is not supported".into_lua_err())?,
 			Value::Function(_) => Err("function is not supported".into_lua_err())?,
 			Value::Thread(_) => Err("thread is not supported".into_lua_err())?,
-			Value::UserData(ud) => {
-				if let Ok(t) = ud.take::<yazi_shared::url::Url>() {
-					DataKey::Url(t)
-				} else {
-					Err("unsupported userdata included".into_lua_err())?
+			Value::UserData(ud) => match ud.type_id() {
+				Some(t) if t == TypeId::of::<yazi_binding::Url>() => {
+					DataKey::Url(ud.take::<yazi_binding::Url>()?.into())
 				}
-			}
+				Some(t) if t == TypeId::of::<yazi_binding::Urn>() => {
+					DataKey::Urn(ud.take::<yazi_binding::Urn>()?.into())
+				}
+				Some(t) if t == TypeId::of::<yazi_binding::Id>() => {
+					DataKey::Id(**ud.borrow::<yazi_binding::Id>()?)
+				}
+				_ => Err(format!("unsupported userdata included: {ud:?}").into_lua_err())?,
+			},
 			Value::Error(_) => Err("error is not supported".into_lua_err())?,
 			Value::Other(..) => Err("unknown data is not supported".into_lua_err())?,
 		})
 	}
 
+	#[inline]
 	fn key_to_value(lua: &Lua, key: DataKey) -> mlua::Result<Value> {
-		Ok(match key {
-			DataKey::Url(u) => Value::UserData(lua.create_any_userdata(u)?),
-			key => Self::key_to_value_ref(lua, &key)?,
-		})
+		match key {
+			DataKey::Url(u) => yazi_binding::Url::new(u).into_lua(lua),
+			DataKey::Urn(u) => yazi_binding::Urn::new(u).into_lua(lua),
+			_ => Self::key_to_value_ref(lua, &key),
+		}
 	}
 
 	fn key_to_value_ref(lua: &Lua, key: &DataKey) -> mlua::Result<Value> {
@@ -218,9 +236,12 @@ impl Sendable {
 			DataKey::Nil => Value::Nil,
 			DataKey::Boolean(b) => Value::Boolean(*b),
 			DataKey::Integer(i) => Value::Integer(*i),
-			DataKey::Number(n) => Value::Number(n.get()),
+			DataKey::Number(n) => Value::Number(n.0),
 			DataKey::String(s) => Value::String(lua.create_string(s.as_ref())?),
-			DataKey::Url(u) => Value::UserData(lua.create_any_userdata(u.clone())?),
+			DataKey::Id(i) => yazi_binding::Id(*i).into_lua(lua)?,
+			DataKey::Url(u) => yazi_binding::Url::new(u.clone()).into_lua(lua)?,
+			DataKey::Urn(u) => yazi_binding::Urn::new(u.clone()).into_lua(lua)?,
+			DataKey::Bytes(b) => Value::String(lua.create_string(b)?),
 		})
 	}
 }

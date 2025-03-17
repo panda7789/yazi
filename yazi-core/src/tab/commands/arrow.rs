@@ -22,33 +22,20 @@ impl From<isize> for Opt {
 impl Tab {
 	#[yazi_codegen::command]
 	pub fn arrow(&mut self, opt: Opt) {
-		// TODO: remove this
-		if let Step::Fixed(n) = opt.step {
-			if n <= -999999 || n >= 999999 {
-				yazi_proxy::AppProxy::notify_warn(
-					"Deprecated command",
-					"`arrow -99999999` and `arrow 99999999` have been deprecated, please use `arrow top` and `arrow bot` instead.
-
-See #2294 for more details: https://github.com/sxyazi/yazi/pull/2294",
-				);
-			}
-		}
-
 		if !self.current.arrow(opt.step) {
 			return;
 		}
 
 		// Visual selection
 		if let Some((start, items)) = self.mode.visual_mut() {
-			let after = self.current.cursor;
-
-			items.clear();
-			for i in start.min(after)..=after.max(start) {
-				items.insert(i);
-			}
+			let end = self.current.cursor;
+			*items = (start.min(end)..=end.max(start)).collect();
 		}
 
-		MgrProxy::hover(None, self.id);
+		self.hover(None);
+		MgrProxy::peek(false);
+		MgrProxy::watch();
+
 		render!();
 	}
 }

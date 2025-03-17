@@ -4,7 +4,7 @@ use tokio::{fs::{self, DirEntry}, select, sync::mpsc::{self, UnboundedReceiver}}
 use yazi_shared::{Id, url::{Url, Urn, UrnBuf}};
 
 use super::{FilesSorter, Filter};
-use crate::{Cha, FILES_TICKET, File, FilesOp, SortBy, maybe_exists, mounts::PARTITIONS};
+use crate::{FILES_TICKET, File, FilesOp, SortBy, cha::Cha, mounts::PARTITIONS};
 
 #[derive(Default)]
 pub struct Files {
@@ -41,7 +41,7 @@ impl Files {
 					result = item.metadata() => {
 						let url = Url::from(item.path());
 						_ = tx.send(match result {
-							Ok(meta) => File::from_meta(url, meta).await,
+							Ok(meta) => File::from_follow(url, meta).await,
 							Err(_) => File::from_dummy(url, item.file_type().await.ok())
 						});
 					}
@@ -65,7 +65,7 @@ impl Files {
 			for entry in entries {
 				let url = Url::from(entry.path());
 				files.push(match entry.metadata().await {
-					Ok(meta) => File::from_meta(url, meta).await,
+					Ok(meta) => File::from_follow(url, meta).await,
 					Err(_) => File::from_dummy(url, entry.file_type().await.ok()),
 				});
 			}
@@ -81,20 +81,13 @@ impl Files {
 		)
 	}
 
-	pub async fn assert_stale(cwd: &Url, cha: Cha) -> Option<Cha> {
-		match fs::metadata(cwd).await.map(Cha::from) {
-			Ok(c) if !c.is_dir() => {
-				FilesOp::IOErr(cwd.clone(), std::io::ErrorKind::NotADirectory).emit();
-			}
+	pub async fn assert_stale(dir: &Url, cha: Cha) -> Option<Cha> {
+		use std::io::ErrorKind;
+		match Cha::from_url(dir).await {
+			Ok(c) if !c.is_dir() => FilesOp::issue_error(dir, ErrorKind::NotADirectory).await,
 			Ok(c) if c.hits(cha) && PARTITIONS.read().heuristic(cha) => {}
 			Ok(c) => return Some(c),
-			Err(e) => {
-				if maybe_exists(cwd).await {
-					FilesOp::IOErr(cwd.clone(), e.kind()).emit();
-				} else if let Some((p, n)) = cwd.pair() {
-					FilesOp::Deleting(p, HashSet::from_iter([n])).emit();
-				}
-			}
+			Err(e) => FilesOp::issue_error(dir, e.kind()).await,
 		}
 		None
 	}
@@ -136,7 +129,11 @@ impl Files {
 		}
 	}
 
-	pub fn update_size(&mut self, sizes: HashMap<UrnBuf, u64>) {
+	pub fn update_size(&mut self, mut sizes: HashMap<UrnBuf, u64>) {
+		if sizes.len() <= 50 {
+			sizes.retain(|k, v| self.sizes.get(k) != Some(v));
+		}
+
 		if sizes.is_empty() {
 			return;
 		}
@@ -189,10 +186,9 @@ impl Files {
 		}
 
 		let (mut hidden, mut items) = if let Some(filter) = &self.filter {
-			urns.into_iter().partition(|u| {
-				(!self.show_hidden && u.as_urn().is_hidden())
-					|| !u.as_urn().name().is_some_and(|s| filter.matches(s))
-			})
+			urns
+				.into_iter()
+				.partition(|u| (!self.show_hidden && u.as_urn().is_hidden()) || !filter.matches(u.as_urn()))
 		} else if self.show_hidden {
 			(HashSet::new(), urns)
 		} else {
@@ -270,7 +266,7 @@ impl Files {
 		let (mut hidden, mut items) = if let Some(filter) = &self.filter {
 			files
 				.into_iter()
-				.partition(|(_, f)| (f.is_hidden() && !self.show_hidden) || !filter.matches(f.name()))
+				.partition(|(_, f)| (f.is_hidden() && !self.show_hidden) || !filter.matches(f.urn()))
 		} else if self.show_hidden {
 			(HashMap::new(), files)
 		} else {
@@ -323,7 +319,7 @@ impl Files {
 		if let Some(filter) = &self.filter {
 			files
 				.into_iter()
-				.partition(|f| (f.is_hidden() && !self.show_hidden) || !filter.matches(f.name()))
+				.partition(|f| (f.is_hidden() && !self.show_hidden) || !filter.matches(f.urn()))
 		} else if self.show_hidden {
 			(vec![], files.into_iter().collect())
 		} else {

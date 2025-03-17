@@ -1,4 +1,4 @@
-use tracing::warn;
+use tracing::debug;
 use yazi_shared::env_exists;
 
 use crate::Mux;
@@ -12,6 +12,7 @@ pub enum Brand {
 	Foot,
 	Ghostty,
 	Microsoft,
+	Warp,
 	Rio,
 	BlackBox,
 	VSCode,
@@ -34,6 +35,7 @@ impl Brand {
 			("WezTerm", Self::WezTerm),
 			("foot", Self::Foot),
 			("ghostty", Self::Ghostty),
+			("Warp", Self::Warp),
 			("tmux ", Self::Tmux),
 			("libvterm", Self::VTerm),
 			("Bobcat", Self::Bobcat),
@@ -44,6 +46,7 @@ impl Brand {
 	pub fn from_env() -> Option<Self> {
 		use Brand as B;
 
+		let (term, program) = B::env();
 		let vars = [
 			("KITTY_WINDOW_ID", B::Kitty),
 			("KONSOLE_VERSION", B::Konsole),
@@ -51,28 +54,11 @@ impl Brand {
 			("WEZTERM_EXECUTABLE", B::WezTerm),
 			("GHOSTTY_RESOURCES_DIR", B::Ghostty),
 			("WT_Session", B::Microsoft),
+			("WARP_HONOR_PS1", B::Warp),
 			("VSCODE_INJECTION", B::VSCode),
 			("TABBY_CONFIG_DIRECTORY", B::Tabby),
 		];
-		match vars.into_iter().find(|&(s, _)| env_exists(s)) {
-			Some((_, brand)) => return Some(brand),
-			None => warn!("[Adapter] No special environment variables detected"),
-		}
 
-		let (term, program) = B::env();
-		match program.as_str() {
-			"iTerm.app" => return Some(B::Iterm2),
-			"WezTerm" => return Some(B::WezTerm),
-			"ghostty" => return Some(B::Ghostty),
-			"rio" => return Some(B::Rio),
-			"BlackBox" => return Some(B::BlackBox),
-			"vscode" => return Some(B::VSCode),
-			"Tabby" => return Some(B::Tabby),
-			"Hyper" => return Some(B::Hyper),
-			"mintty" => return Some(B::Mintty),
-			"Apple_Terminal" => return Some(B::Apple),
-			_ => warn!("[Adapter] Unknown TERM_PROGRAM: {program}"),
-		}
 		match term.as_str() {
 			"xterm-kitty" => return Some(B::Kitty),
 			"foot" => return Some(B::Foot),
@@ -80,8 +66,27 @@ impl Brand {
 			"xterm-ghostty" => return Some(B::Ghostty),
 			"rio" => return Some(B::Rio),
 			"rxvt-unicode-256color" => return Some(B::Urxvt),
-			_ => warn!("[Adapter] Unknown TERM: {term}"),
+			_ => {}
 		}
+		match program.as_str() {
+			"iTerm.app" => return Some(B::Iterm2),
+			"WezTerm" => return Some(B::WezTerm),
+			"ghostty" => return Some(B::Ghostty),
+			"WarpTerminal" => return Some(B::Warp),
+			"rio" => return Some(B::Rio),
+			"BlackBox" => return Some(B::BlackBox),
+			"vscode" => return Some(B::VSCode),
+			"Tabby" => return Some(B::Tabby),
+			"Hyper" => return Some(B::Hyper),
+			"mintty" => return Some(B::Mintty),
+			"Apple_Terminal" => return Some(B::Apple),
+			_ => {}
+		}
+		if let Some((var, brand)) = vars.into_iter().find(|&(s, _)| env_exists(s)) {
+			debug!("Detected special environment variable: {var}");
+			return Some(brand);
+		}
+
 		None
 	}
 
@@ -98,6 +103,7 @@ impl Brand {
 			B::Foot => &[A::Sixel],
 			B::Ghostty => &[A::Kgp],
 			B::Microsoft => &[A::Sixel],
+			B::Warp => &[A::Iip, A::KgpOld],
 			B::Rio => &[A::Iip, A::Sixel],
 			B::BlackBox => &[A::Sixel],
 			B::VSCode => &[A::Iip, A::Sixel],

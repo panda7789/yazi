@@ -2,6 +2,7 @@ use std::{env, ffi::OsStr, fmt::Write};
 
 use regex::Regex;
 use yazi_adapter::Mux;
+use yazi_shared::timestamp_us;
 
 use super::Actions;
 
@@ -25,7 +26,8 @@ impl Actions {
 		writeln!(s, "    Emulator.detect     : {:?}", yazi_adapter::EMULATOR)?;
 
 		writeln!(s, "\nAdapter")?;
-		writeln!(s, "    Adapter.matches: {:?}", yazi_adapter::ADAPTOR)?;
+		writeln!(s, "    Adapter.matches    : {:?}", yazi_adapter::ADAPTOR)?;
+		writeln!(s, "    Dimension.available: {:?}", yazi_adapter::Dimension::available())?;
 
 		writeln!(s, "\nDesktop")?;
 		writeln!(s, "    XDG_SESSION_TYPE           : {:?}", env::var_os("XDG_SESSION_TYPE"))?;
@@ -55,17 +57,17 @@ impl Actions {
 		writeln!(
 			s,
 			"    default     : {:?}",
-			yazi_config::OPEN.openers("f75a.txt", "text/plain").and_then(|a| a.first().cloned())
+			yazi_config::YAZI.opener.first(yazi_config::YAZI.open.all("f75a.txt", "text/plain"))
 		)?;
 		writeln!(
 			s,
 			"    block-create: {:?}",
-			yazi_config::OPEN.block_opener("bulk-create.txt", "text/plain")
+			yazi_config::YAZI.opener.block(yazi_config::YAZI.open.all("bulk-create.txt", "text/plain"))
 		)?;
 		writeln!(
 			s,
 			"    block-rename: {:?}",
-			yazi_config::OPEN.block_opener("bulk-rename.txt", "text/plain")
+			yazi_config::YAZI.opener.block(yazi_config::YAZI.open.all("bulk-rename.txt", "text/plain"))
 		)?;
 
 		writeln!(s, "\nMultiplexers")?;
@@ -91,6 +93,7 @@ impl Actions {
 		writeln!(s, "    zoxide        : {}", Self::process_output("zoxide", "--version"))?;
 		#[rustfmt::skip]
 		writeln!(s, "    7zz/7z        : {} / {}", Self::process_output("7zz", "i"), Self::process_output("7z", "i"))?;
+		writeln!(s, "    resvg         : {}", Self::process_output("resvg", "--version"))?;
 		writeln!(s, "    jq            : {}", Self::process_output("jq", "--version"))?;
 
 		writeln!(s, "\nClipboard")?;
@@ -98,6 +101,9 @@ impl Actions {
 		writeln!(s, "    wl-copy/paste: {} / {}", Self::process_output("wl-copy", "--version"), Self::process_output("wl-paste", "--version"))?;
 		writeln!(s, "    xclip        : {}", Self::process_output("xclip", "-version"))?;
 		writeln!(s, "    xsel         : {}", Self::process_output("xsel", "--version"))?;
+
+		writeln!(s, "\nRoutine")?;
+		writeln!(s, "    `file -bL --mime-type`: {}", Self::file1_output())?;
 
 		writeln!(
 			s,
@@ -128,6 +134,21 @@ impl Actions {
 				}
 			}
 			Ok(out) => format!("{:?}, {:?}", out.status, String::from_utf8_lossy(&out.stderr)),
+			Err(e) => format!("{e}"),
+		}
+	}
+
+	fn file1_output() -> String {
+		use std::io::Write;
+
+		let p = env::temp_dir().join(format!("yazi-debug-{}", timestamp_us()));
+		std::fs::File::create_new(&p).map(|mut f| f.write_all(b"Hello, World!")).ok();
+
+		let cmd = env::var_os("YAZI_FILE_ONE").unwrap_or("file".into());
+		match std::process::Command::new(cmd).args(["-bL", "--mime-type"]).arg(&p).output() {
+			Ok(out) => {
+				String::from_utf8_lossy(&out.stdout).trim().lines().next().unwrap_or_default().to_owned()
+			}
 			Err(e) => format!("{e}"),
 		}
 	}

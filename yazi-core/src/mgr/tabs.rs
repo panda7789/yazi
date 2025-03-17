@@ -3,10 +3,11 @@ use std::ops::{Deref, DerefMut};
 use yazi_boot::BOOT;
 use yazi_dds::Pubsub;
 use yazi_fs::File;
+use yazi_macro::err;
 use yazi_proxy::MgrProxy;
 use yazi_shared::{Id, url::Url};
 
-use crate::tab::{Folder, Tab};
+use crate::tab::{Folder, Tab, commands::CdSource};
 
 pub struct Tabs {
 	pub cursor:       usize,
@@ -21,20 +22,12 @@ impl Tabs {
 		for (i, tab) in tabs.iter_mut().enumerate() {
 			let file = &BOOT.files[i];
 			if file.is_empty() {
-				tab.cd(Url::from(&BOOT.cwds[i]));
+				tab.cd((Url::from(&BOOT.cwds[i]), CdSource::Tab));
 			} else {
-				tab.reveal(Url::from(BOOT.cwds[i].join(file)));
+				tab.reveal((Url::from(BOOT.cwds[i].join(file)), CdSource::Tab));
 			}
 		}
 		tabs
-	}
-
-	pub(super) fn absolute(&self, rel: isize) -> usize {
-		if rel > 0 {
-			(self.cursor + rel as usize).min(self.items.len() - 1)
-		} else {
-			self.cursor.saturating_sub(rel.unsigned_abs())
-		}
 	}
 
 	pub(super) fn set_idx(&mut self, idx: usize) {
@@ -46,7 +39,7 @@ impl Tabs {
 		self.cursor = idx;
 		MgrProxy::refresh();
 		MgrProxy::peek(true);
-		Pubsub::pub_from_tab(self.active().id);
+		err!(Pubsub::pub_from_tab(self.active().id));
 	}
 }
 
@@ -56,20 +49,6 @@ impl Tabs {
 
 	#[inline]
 	pub(super) fn active_mut(&mut self) -> &mut Tab { &mut self.items[self.cursor] }
-
-	#[inline]
-	pub fn active_or(&self, id: Option<Id>) -> &Tab {
-		id.and_then(|id| self.iter().find(|&t| t.id == id)).unwrap_or(self.active())
-	}
-
-	#[inline]
-	pub(super) fn active_or_mut(&mut self, id: Option<Id>) -> &mut Tab {
-		if let Some(i) = id.and_then(|id| self.iter().position(|t| t.id == id)) {
-			&mut self.items[i]
-		} else {
-			self.active_mut()
-		}
-	}
 
 	#[inline]
 	pub fn current(&self) -> &Folder { &self.active().current }

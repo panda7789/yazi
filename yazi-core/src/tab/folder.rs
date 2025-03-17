@@ -1,10 +1,13 @@
 use std::mem;
 
-use yazi_config::{LAYOUT, MGR};
+use yazi_config::{LAYOUT, YAZI};
 use yazi_dds::Pubsub;
-use yazi_fs::{Cha, File, Files, FilesOp, FolderStage, Step};
+use yazi_fs::{File, Files, FilesOp, FolderStage, Step, cha::Cha};
+use yazi_macro::err;
 use yazi_proxy::MgrProxy;
 use yazi_shared::{Id, url::{Url, Urn, UrnBuf}};
+
+use crate::Scrollable;
 
 pub struct Folder {
 	pub url:   Url,
@@ -24,7 +27,7 @@ impl Default for Folder {
 		Self {
 			url:    Default::default(),
 			cha:    Default::default(),
-			files:  Files::new(MGR.show_hidden),
+			files:  Files::new(YAZI.mgr.show_hidden),
 			stage:  Default::default(),
 			offset: Default::default(),
 			cursor: Default::default(),
@@ -46,7 +49,7 @@ impl Folder {
 				(self.cha, self.stage) = (cha, FolderStage::Loaded);
 			}
 			FilesOp::Part(_, ref files, _) if files.is_empty() => {
-				(self.cha, self.stage) = (Cha::dummy(), FolderStage::Loading);
+				(self.cha, self.stage) = (Cha::default(), FolderStage::Loading);
 			}
 			FilesOp::Part(_, _, ticket) if ticket == self.files.ticket() => {
 				self.stage = FolderStage::Loading;
@@ -55,7 +58,7 @@ impl Folder {
 				(self.cha, self.stage) = (cha, FolderStage::Loaded);
 			}
 			FilesOp::IOErr(_, kind) => {
-				(self.cha, self.stage) = (Cha::dummy(), FolderStage::Failed(kind));
+				(self.cha, self.stage) = (Cha::default(), FolderStage::Failed(kind));
 			}
 			_ => {}
 		}
@@ -70,7 +73,8 @@ impl Folder {
 			FilesOp::Creating(_, files) => self.files.update_creating(files),
 			FilesOp::Deleting(_, urns) => {
 				let deleted = self.files.update_deleting(urns);
-				self.cursor -= deleted.into_iter().filter(|&i| i < self.cursor).count();
+				let delta = deleted.into_iter().filter(|&i| i < self.cursor).count() as isize;
+				self.arrow(-delta);
 			}
 			FilesOp::Updating(_, files) => _ = self.files.update_updating(files),
 			FilesOp::Upserting(_, files) => self.files.update_upserting(files),
@@ -87,19 +91,16 @@ impl Folder {
 		if !self.update(op) {
 			return false;
 		} else if self.stage != old {
-			Pubsub::pub_from_load(tab, &self.url, self.stage);
+			err!(Pubsub::pub_from_load(tab, &self.url, self.stage));
 		}
 		true
 	}
 
 	pub fn arrow(&mut self, step: impl Into<Step>) -> bool {
-		let step = step.into() as Step;
 		let mut b = if self.files.is_empty() {
 			(mem::take(&mut self.cursor), mem::take(&mut self.offset)) != (0, 0)
-		} else if step.is_positive() {
-			self.next(step)
 		} else {
-			self.prev(step)
+			self.scroll(step.into())
 		};
 
 		self.trace = self.hovered().filter(|_| b).map(|h| h.urn_owned()).or(self.trace.take());
@@ -124,7 +125,7 @@ impl Folder {
 	}
 
 	pub fn sync_page(&mut self, force: bool) {
-		let limit = LAYOUT.get().current.height as usize;
+		let limit = LAYOUT.get().limit();
 		if limit == 0 {
 			return;
 		}
@@ -135,46 +136,12 @@ impl Folder {
 		}
 	}
 
-	fn next(&mut self, step: Step) -> bool {
-		let old = (self.cursor, self.offset);
-		let len = self.files.len();
-
-		let limit = LAYOUT.get().current.height as usize;
-		let scrolloff = (limit / 2).min(MGR.scrolloff as usize);
-
-		self.cursor = step.add(self.cursor, limit).min(len.saturating_sub(1));
-		self.offset = if self.cursor < (self.offset + limit).min(len).saturating_sub(scrolloff) {
-			self.offset.min(len.saturating_sub(1))
-		} else {
-			len.saturating_sub(limit).min(self.offset + self.cursor - old.0)
-		};
-
-		old != (self.cursor, self.offset)
-	}
-
-	fn prev(&mut self, step: Step) -> bool {
-		let old = (self.cursor, self.offset);
-		let max = self.files.len().saturating_sub(1);
-
-		let limit = LAYOUT.get().current.height as usize;
-		let scrolloff = (limit / 2).min(MGR.scrolloff as usize);
-
-		self.cursor = step.add(self.cursor, limit).min(max);
-		self.offset = if self.cursor < self.offset + scrolloff {
-			self.offset.saturating_sub(old.0 - self.cursor)
-		} else {
-			self.offset.min(max)
-		};
-
-		old != (self.cursor, self.offset)
-	}
-
 	fn squeeze_offset(&mut self) -> bool {
 		let old = self.offset;
 		let len = self.files.len();
 
-		let limit = LAYOUT.get().current.height as usize;
-		let scrolloff = (limit / 2).min(MGR.scrolloff as usize);
+		let limit = LAYOUT.get().limit();
+		let scrolloff = (limit / 2).min(YAZI.mgr.scrolloff as usize);
 
 		self.offset = if self.cursor < (self.offset + limit).min(len).saturating_sub(scrolloff) {
 			len.saturating_sub(limit).min(self.offset)
@@ -192,10 +159,27 @@ impl Folder {
 
 	pub fn paginate(&self, page: usize) -> &[File] {
 		let len = self.files.len();
-		let limit = LAYOUT.get().current.height as usize;
+		let limit = LAYOUT.get().limit();
 
 		let start = (page.saturating_sub(1) * limit).min(len.saturating_sub(1));
 		let end = ((page + 2) * limit).min(len);
 		&self.files[start..end]
 	}
+}
+
+impl Scrollable for Folder {
+	#[inline]
+	fn len(&self) -> usize { self.files.len() }
+
+	#[inline]
+	fn limit(&self) -> usize { LAYOUT.get().limit() }
+
+	#[inline]
+	fn scrolloff(&self) -> usize { (self.limit() / 2).min(YAZI.mgr.scrolloff as usize) }
+
+	#[inline]
+	fn cursor_mut(&mut self) -> &mut usize { &mut self.cursor }
+
+	#[inline]
+	fn offset_mut(&mut self) -> &mut usize { &mut self.offset }
 }

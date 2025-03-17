@@ -1,5 +1,7 @@
 use std::{borrow::{Borrow, Cow}, ffi::OsStr, ops::Deref, path::{Path, PathBuf}};
 
+use serde::Serialize;
+
 #[derive(Debug, Eq, PartialEq, Hash)]
 #[repr(transparent)]
 pub struct Urn(Path);
@@ -19,7 +21,8 @@ impl Urn {
 	#[cfg(unix)]
 	#[inline]
 	pub fn is_hidden(&self) -> bool {
-		self.name().is_some_and(|s| s.as_encoded_bytes().starts_with(b"."))
+		use std::os::unix::ffi::OsStrExt;
+		self.name().is_some_and(|s| s.as_bytes().starts_with(b"."))
 	}
 }
 
@@ -31,6 +34,10 @@ impl Deref for Urn {
 
 impl AsRef<Path> for Urn {
 	fn as_ref(&self) -> &Path { &self.0 }
+}
+
+impl AsRef<OsStr> for Urn {
+	fn as_ref(&self) -> &OsStr { self.0.as_os_str() }
 }
 
 impl ToOwned for Urn {
@@ -48,7 +55,7 @@ impl PartialEq<Cow<'_, OsStr>> for &Urn {
 }
 
 // --- UrnBuf
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize)]
 pub struct UrnBuf(PathBuf);
 
 impl Borrow<Urn> for UrnBuf {

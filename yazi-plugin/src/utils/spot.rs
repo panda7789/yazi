@@ -1,16 +1,17 @@
 use mlua::{AnyUserData, Function, Lua, Table};
 use yazi_config::THEME;
 use yazi_macro::emit;
-use yazi_shared::event::Cmd;
+use yazi_shared::{Id, event::Cmd};
 
 use super::Utils;
-use crate::{elements::Renderable, file::FileRef};
+use crate::{elements::{Edge, Renderable}, file::FileRef};
 
 pub struct SpotLock {
 	pub url:  yazi_shared::url::Url,
-	pub cha:  yazi_fs::Cha,
+	pub cha:  yazi_fs::cha::Cha,
 	pub mime: String,
 
+	pub id:   Id,
 	pub skip: usize,
 	pub data: Vec<Renderable>,
 }
@@ -25,6 +26,7 @@ impl TryFrom<Table> for SpotLock {
 			cha:  file.cha,
 			mime: t.raw_get("mime")?,
 
+			id:   *t.raw_get::<yazi_binding::Id>("id")?,
 			skip: t.raw_get("skip")?,
 			data: Default::default(),
 		})
@@ -32,6 +34,9 @@ impl TryFrom<Table> for SpotLock {
 }
 
 impl SpotLock {
+	#[inline]
+	pub fn len(&self) -> Option<usize> { Some(self.table()?.len()) }
+
 	pub fn select(&mut self, idx: Option<usize>) {
 		if let Some(t) = self.table_mut() {
 			t.select(idx);
@@ -42,14 +47,14 @@ impl SpotLock {
 
 	pub fn table(&self) -> Option<&crate::elements::Table> {
 		self.data.iter().rev().find_map(|r| match r {
-			Renderable::Table(t) => Some(t),
+			Renderable::Table(t) => Some(t.as_ref()),
 			_ => None,
 		})
 	}
 
 	pub fn table_mut(&mut self) -> Option<&mut crate::elements::Table> {
 		self.data.iter_mut().rev().find_map(|r| match r {
-			Renderable::Table(t) => Some(t),
+			Renderable::Table(t) => Some(t.as_mut()),
 			_ => None,
 		})
 	}
@@ -68,8 +73,8 @@ impl Utils {
 				Renderable::Clear(crate::elements::Clear { area }),
 				Renderable::Border(crate::elements::Border {
 					area,
-					position: ratatui::widgets::Borders::ALL,
-					type_: ratatui::widgets::BorderType::Rounded,
+					edge: Edge(ratatui::widgets::Borders::ALL),
+					r#type: ratatui::widgets::BorderType::Rounded,
 					style: THEME.spot.border.into(),
 					titles: vec![(
 						ratatui::widgets::block::Position::Top,
@@ -78,7 +83,7 @@ impl Utils {
 							.style(THEME.spot.title),
 					)],
 				}),
-				Renderable::Table(table),
+				Renderable::Table(Box::new(table)),
 			];
 			emit!(Call(Cmd::new("mgr:update_spotted").with_any("lock", lock)));
 

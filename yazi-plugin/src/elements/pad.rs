@@ -1,6 +1,6 @@
 use std::ops::{Add, AddAssign, Deref};
 
-use mlua::{FromLua, Lua, MetaMethod, Table, UserData};
+use mlua::{FromLua, IntoLua, Lua, MetaMethod, Table, UserData, Value};
 
 #[derive(Clone, Copy, Default, FromLua)]
 pub struct Pad(ratatui::widgets::Padding);
@@ -16,16 +16,11 @@ impl From<ratatui::widgets::Padding> for Pad {
 }
 
 impl Pad {
-	pub fn compose(lua: &Lua, v4: bool) -> mlua::Result<Table> {
-		let new = if v4 {
+	pub fn compose(lua: &Lua) -> mlua::Result<Value> {
+		let new =
 			lua.create_function(|_, (_, top, right, bottom, left): (Table, u16, u16, u16, u16)| {
 				Ok(Self(ratatui::widgets::Padding::new(left, right, top, bottom)))
-			})?
-		} else {
-			lua.create_function(|_, (_, left, right, top, bottom): (Table, u16, u16, u16, u16)| {
-				Ok(Self(ratatui::widgets::Padding::new(left, right, top, bottom)))
-			})?
-		};
+			})?;
 
 		let pad = lua.create_table_from([
 			(
@@ -52,7 +47,7 @@ impl Pad {
 		])?;
 
 		pad.set_metatable(Some(lua.create_table_from([(MetaMethod::Call.name(), new)])?));
-		Ok(pad)
+		pad.into_lua(lua)
 	}
 }
 

@@ -18,7 +18,7 @@ function Entity:icon()
 	local icon = self._file:icon()
 	if not icon then
 		return ""
-	elseif self._file:is_hovered() then
+	elseif self._file.is_hovered then
 		return icon.text .. " "
 	else
 		return ui.Line(icon.text .. " "):style(icon.style)
@@ -52,7 +52,7 @@ function Entity:highlights()
 end
 
 function Entity:found()
-	if not self._file:is_hovered() then
+	if not self._file.is_hovered then
 		return ""
 	end
 
@@ -73,25 +73,38 @@ function Entity:symlink()
 	end
 
 	local to = self._file.link_to
-	return to and ui.Span(string.format(" -> %s", to)):italic() or ""
+	return to and ui.Span(string.format(" -> %s", to)):style(th.mgr.symlink_target) or ""
 end
 
 function Entity:redraw()
 	local lines = {}
 	for _, c in ipairs(self._children) do
-		lines[#lines + 1] = (type(c[1]) == "string" and self[c[1]] or c[1])(self)
+		local line = (type(c[1]) == "string" and self[c[1]] or c[1])(self)
+		c.width, lines[#lines + 1] = ui.width(line), line
 	end
 	return ui.Line(lines):style(self:style())
 end
 
 function Entity:style()
 	local s = self._file:style()
-	if not self._file:is_hovered() then
+	if not self._file.is_hovered then
 		return s
-	elseif self._file:in_preview() then
+	elseif self._file.in_preview then
 		return s and s:patch(th.mgr.preview_hovered) or th.mgr.preview_hovered
 	else
 		return s and s:patch(th.mgr.hovered) or th.mgr.hovered
+	end
+end
+
+function Entity:ellipsis(max)
+	local adv, f = 0, self._file
+	for _, child in ipairs(self._children) do
+		adv = adv + child.width
+		if adv >= max then
+			return not f.cha.is_dir and f.url.ext and "…." .. f.url.ext or nil
+		elseif child.id == 4 then
+			break
+		end
 	end
 end
 

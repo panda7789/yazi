@@ -1,19 +1,23 @@
 use globset::GlobBuilder;
 use mlua::{ExternalError, ExternalResult, Function, IntoLua, IntoLuaMulti, Lua, Table, Value};
 use tokio::fs;
+use yazi_binding::{Error, Url, UrlRef};
 use yazi_fs::{mounts::PARTITIONS, remove_dir_clean};
 
-use crate::{Composer, Error, bindings::Cha, file::File, url::{Url, UrlRef}};
+use crate::{Composer, bindings::{Cha, SizeCalculator}, file::File};
 
 pub fn compose(lua: &Lua) -> mlua::Result<Value> {
-	Composer::make(lua, 10, |lua, key| {
+	Composer::make(lua, |lua, key| {
 		match key {
+			b"op" => op(lua)?,
 			b"cwd" => cwd(lua)?,
 			b"cha" => cha(lua)?,
 			b"write" => write(lua)?,
 			b"create" => create(lua)?,
 			b"remove" => remove(lua)?,
 			b"read_dir" => read_dir(lua)?,
+			b"calc_size" => calc_size(lua)?,
+			b"expand_url" => expand_url(lua)?,
 			b"unique_name" => unique_name(lua)?,
 			b"partitions" => partitions(lua)?,
 			_ => return Ok(Value::Nil),
@@ -22,9 +26,18 @@ pub fn compose(lua: &Lua) -> mlua::Result<Value> {
 	})
 }
 
+fn op(lua: &Lua) -> mlua::Result<Function> {
+	lua.create_function(|lua, (name, t): (mlua::String, Table)| match name.as_bytes().as_ref() {
+		b"part" => super::FilesOp::part(lua, t),
+		b"done" => super::FilesOp::done(lua, t),
+		b"size" => super::FilesOp::size(lua, t),
+		_ => Err("Unknown operation".into_lua_err())?,
+	})
+}
+
 fn cwd(lua: &Lua) -> mlua::Result<Function> {
 	lua.create_function(|lua, ()| match std::env::current_dir() {
-		Ok(p) => (Url::from(p), Value::Nil).into_lua_multi(lua),
+		Ok(p) => Url::new(p).into_lua_multi(lua),
 		Err(e) => (Value::Nil, Error::Io(e)).into_lua_multi(lua),
 	})
 }
@@ -38,7 +51,7 @@ fn cha(lua: &Lua) -> mlua::Result<Function> {
 		};
 
 		match meta {
-			Ok(m) => (Cha::from(m), Value::Nil).into_lua_multi(&lua),
+			Ok(m) => Cha(yazi_fs::cha::Cha::new(&url, m)).into_lua_multi(&lua),
 			Err(e) => (Value::Nil, Error::Io(e)).into_lua_multi(&lua),
 		}
 	})
@@ -47,30 +60,30 @@ fn cha(lua: &Lua) -> mlua::Result<Function> {
 fn write(lua: &Lua) -> mlua::Result<Function> {
 	lua.create_async_function(|lua, (url, data): (UrlRef, mlua::String)| async move {
 		match fs::write(&*url, data.as_bytes()).await {
-			Ok(()) => (true, Value::Nil).into_lua_multi(&lua),
+			Ok(()) => true.into_lua_multi(&lua),
 			Err(e) => (false, Error::Io(e)).into_lua_multi(&lua),
 		}
 	})
 }
 
 fn create(lua: &Lua) -> mlua::Result<Function> {
-	lua.create_async_function(|lua, (type_, url): (mlua::String, UrlRef)| async move {
-		let result = match type_.as_bytes().as_ref() {
+	lua.create_async_function(|lua, (r#type, url): (mlua::String, UrlRef)| async move {
+		let result = match r#type.as_bytes().as_ref() {
 			b"dir" => fs::create_dir(&*url).await,
 			b"dir_all" => fs::create_dir_all(&*url).await,
 			_ => Err("Creation type must be 'dir' or 'dir_all'".into_lua_err())?,
 		};
 
 		match result {
-			Ok(()) => (true, Value::Nil).into_lua_multi(&lua),
+			Ok(()) => true.into_lua_multi(&lua),
 			Err(e) => (false, Error::Io(e)).into_lua_multi(&lua),
 		}
 	})
 }
 
 fn remove(lua: &Lua) -> mlua::Result<Function> {
-	lua.create_async_function(|lua, (type_, url): (mlua::String, UrlRef)| async move {
-		let result = match type_.as_bytes().as_ref() {
+	lua.create_async_function(|lua, (r#type, url): (mlua::String, UrlRef)| async move {
+		let result = match r#type.as_bytes().as_ref() {
 			b"file" => fs::remove_file(&*url).await,
 			b"dir" => fs::remove_dir(&*url).await,
 			b"dir_all" => fs::remove_dir_all(&*url).await,
@@ -79,7 +92,7 @@ fn remove(lua: &Lua) -> mlua::Result<Function> {
 		};
 
 		match result {
-			Ok(()) => (true, Value::Nil).into_lua_multi(&lua),
+			Ok(()) => true.into_lua_multi(&lua),
 			Err(e) => (false, Error::Io(e)).into_lua_multi(&lua),
 		}
 	})
@@ -125,11 +138,11 @@ fn read_dir(lua: &Lua) -> mlua::Result<Function> {
 			let file = if !resolve {
 				yazi_fs::File::from_dummy(url, next.file_type().await.ok())
 			} else if let Ok(meta) = next.metadata().await {
-				yazi_fs::File::from_meta(url, meta).await
+				yazi_fs::File::from_follow(url, meta).await
 			} else {
 				yazi_fs::File::from_dummy(url, next.file_type().await.ok())
 			};
-			files.push(File(file));
+			files.push(File::new(file));
 		}
 
 		let tbl = lua.create_table_with_capacity(files.len(), 0)?;
@@ -137,14 +150,34 @@ fn read_dir(lua: &Lua) -> mlua::Result<Function> {
 			tbl.raw_push(f)?;
 		}
 
-		(tbl, Value::Nil).into_lua_multi(&lua)
+		tbl.into_lua_multi(&lua)
+	})
+}
+
+fn calc_size(lua: &Lua) -> mlua::Result<Function> {
+	lua.create_async_function(|lua, url: UrlRef| async move {
+		match yazi_fs::SizeCalculator::new(&*url).await {
+			Ok(it) => SizeCalculator(it).into_lua_multi(&lua),
+			Err(e) => (Value::Nil, Error::Io(e)).into_lua_multi(&lua),
+		}
+	})
+}
+
+fn expand_url(lua: &Lua) -> mlua::Result<Function> {
+	lua.create_function(|_, value: Value| {
+		use yazi_fs::expand_path;
+		Ok(Url::new(match value {
+			Value::String(s) => expand_path(s.to_str()?.as_ref()),
+			Value::UserData(ud) => expand_path(&*ud.borrow::<yazi_binding::Url>()?),
+			_ => Err("must be a string or a Url".into_lua_err())?,
+		}))
 	})
 }
 
 fn unique_name(lua: &Lua) -> mlua::Result<Function> {
 	lua.create_async_function(|lua, url: UrlRef| async move {
 		match yazi_fs::unique_name(url.clone(), async { false }).await {
-			Ok(u) => (Url(u), Value::Nil).into_lua_multi(&lua),
+			Ok(u) => Url::new(u).into_lua_multi(&lua),
 			Err(e) => (Value::Nil, Error::Io(e)).into_lua_multi(&lua),
 		}
 	})

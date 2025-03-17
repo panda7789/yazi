@@ -49,7 +49,7 @@ local function options()
 end
 
 local function empty(cwd)
-	local child = Command("zoxide"):args({ "query", "-l", "--exclude" }):arg(cwd):stdout(Command.PIPED):spawn()
+	local child = Command("zoxide"):arg({ "query", "-l", "--exclude", cwd }):stdout(Command.PIPED):spawn()
 	if not child then
 		return true
 	end
@@ -66,7 +66,7 @@ local function setup(_, opts)
 		ps.sub(
 			"cd",
 			function()
-				ya.mgr_emit("shell", {
+				ya.emit("shell", {
 					cwd = fs.cwd(),
 					orphan = true,
 					"zoxide add " .. ya.quote(tostring(cx.active.current.cwd)),
@@ -89,8 +89,7 @@ local function entry()
 
 	local _permit = ya.hide()
 	local child, err1 = Command("zoxide")
-		:args({ "query", "-i", "--exclude" })
-		:arg(st.cwd)
+		:arg({ "query", "-i", "--exclude", st.cwd })
 		:env("SHELL", "sh")
 		:env("CLICOLOR", 1)
 		:env("CLICOLOR_FORCE", 1)
@@ -113,7 +112,7 @@ local function entry()
 
 	local target = output.stdout:gsub("\n$", "")
 	if target ~= "" then
-		ya.mgr_emit("cd", { target })
+		ya.emit("cd", { target, raw = true })
 	end
 end
 

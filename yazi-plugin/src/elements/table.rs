@@ -1,8 +1,9 @@
-use mlua::{AnyUserData, ExternalError, Lua, MetaMethod, UserData, Value};
+use mlua::{AnyUserData, ExternalError, IntoLua, Lua, MetaMethod, UserData, Value};
 use ratatui::widgets::StatefulWidget;
+use yazi_binding::Style;
 
 use super::{Area, Row};
-use crate::elements::{Constraint, Style};
+use crate::elements::Constraint;
 
 const EXPECTED: &str = "expected a table of Rows";
 
@@ -32,7 +33,7 @@ pub struct Table {
 }
 
 impl Table {
-	pub fn compose(lua: &Lua) -> mlua::Result<mlua::Table> {
+	pub fn compose(lua: &Lua) -> mlua::Result<Value> {
 		let new = lua.create_function(|_, (_, seq): (mlua::Table, mlua::Table)| {
 			let mut rows = Vec::with_capacity(seq.raw_len());
 			for v in seq.sequence_values::<Value>() {
@@ -45,10 +46,10 @@ impl Table {
 		let table = lua.create_table()?;
 		table.set_metatable(Some(lua.create_table_from([(MetaMethod::Call.name(), new)])?));
 
-		Ok(table)
+		table.into_lua(lua)
 	}
 
-	pub fn selected_cell(&self) -> Option<&ratatui::text::Text> {
+	pub fn selected_cell(&self) -> Option<&ratatui::text::Text<'_>> {
 		let row = &self.rows[self.selected()?];
 		let col = self.state.selected_column()?;
 		if row.cells.is_empty() { None } else { Some(&row.cells[col.min(row.cells.len() - 1)].text) }
@@ -81,6 +82,9 @@ impl Table {
 
 		table.render(self.area.transform(trans), buf, &mut self.state);
 	}
+
+	#[inline]
+	pub(crate) fn len(&self) -> usize { self.rows.len() }
 
 	pub(crate) fn select(&mut self, idx: Option<usize>) {
 		self

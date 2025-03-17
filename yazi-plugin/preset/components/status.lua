@@ -1,4 +1,5 @@
 Status = {
+	-- TODO: remove these two constants
 	LEFT = 0,
 	RIGHT = 1,
 
@@ -40,22 +41,20 @@ function Status:mode()
 
 	local style = self:style()
 	return ui.Line {
-		ui.Span(th.status.sep_left.open):fg(style.main.bg):bg("reset"),
+		ui.Span(th.status.sep_left.open):fg(style.main:bg()):bg("reset"),
 		ui.Span(" " .. mode .. " "):style(style.main),
-		ui.Span(th.status.sep_left.close):fg(style.main.bg):bg(style.alt.bg),
+		ui.Span(th.status.sep_left.close):fg(style.main:bg()):bg(style.alt:bg()),
 	}
 end
 
 function Status:size()
 	local h = self._current.hovered
-	if not h then
-		return ""
-	end
+	local size = h and (h:size() or h.cha.len) or 0
 
 	local style = self:style()
 	return ui.Line {
-		ui.Span(" " .. ya.readable_size(h:size() or h.cha.len) .. " "):style(style.alt),
-		ui.Span(th.status.sep_left.close):fg(style.alt.bg),
+		ui.Span(" " .. ya.readable_size(size) .. " "):style(style.alt),
+		ui.Span(th.status.sep_left.close):fg(style.alt:bg()),
 	}
 end
 
@@ -115,7 +114,7 @@ function Status:percent()
 
 	local style = self:style()
 	return ui.Line {
-		ui.Span(" " .. th.status.sep_right.open):fg(style.alt.bg),
+		ui.Span(" " .. th.status.sep_right.open):fg(style.alt:bg()),
 		ui.Span(percent):style(style.alt),
 	}
 end
@@ -126,9 +125,9 @@ function Status:position()
 
 	local style = self:style()
 	return ui.Line {
-		ui.Span(th.status.sep_right.open):fg(style.main.bg):bg(style.alt.bg),
+		ui.Span(th.status.sep_right.open):fg(style.main:bg()):bg(style.alt:bg()),
 		ui.Span(string.format(" %2d/%-2d ", math.min(cursor + 1, length), length)):style(style.main),
-		ui.Span(th.status.sep_right.close):fg(style.main.bg):bg("reset"),
+		ui.Span(th.status.sep_right.close):fg(style.main:bg()):bg("reset"),
 	}
 end
 
@@ -142,9 +141,9 @@ function Status:redraw()
 
 	return {
 		ui.Text(""):area(self._area):style(th.status.overall),
-		ui.Text(left):area(self._area),
-		ui.Text(right):area(self._area):align(ui.Text.RIGHT),
-		table.unpack(ya.redraw_with(Progress:new(self._area, right_width))),
+		ui.Line(left):area(self._area),
+		ui.Line(right):area(self._area):align(ui.Align.RIGHT),
+		table.unpack(ui.redraw(Progress:new(self._area, right_width))),
 	}
 end
 

@@ -17,14 +17,16 @@ function Parent:redraw()
 		return {}
 	end
 
-	local entities = {}
+	local items = {}
 	for _, f in ipairs(self._folder.window) do
-		entities[#entities + 1] = Entity:new(f):redraw()
+		local entity = Entity:new(f)
+		items[#items + 1] = entity:redraw():truncate {
+			max = self._area.w,
+			ellipsis = entity:ellipsis(self._area.w),
+		}
 	end
 
-	return {
-		ui.List(entities):area(self._area),
-	}
+	return ui.List(items):area(self._area)
 end
 
 -- Mouse events
@@ -36,9 +38,9 @@ function Parent:click(event, up)
 	local y = event.y - self._area.y + 1
 	local window = self._folder and self._folder.window or {}
 	if window[y] then
-		ya.mgr_emit("reveal", { window[y].url })
+		ya.emit("reveal", { window[y].url })
 	else
-		ya.mgr_emit("leave", {})
+		ya.emit("leave", {})
 	end
 end
 

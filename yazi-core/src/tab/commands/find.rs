@@ -25,18 +25,18 @@ impl From<CmdCow> for Opt {
 impl Tab {
 	#[yazi_codegen::command]
 	pub fn find(&mut self, opt: Opt) {
-		tokio::spawn(async move {
-			let rx = InputProxy::show(InputCfg::find(opt.prev));
+		let input = InputProxy::show(InputCfg::find(opt.prev));
 
-			let rx = Debounce::new(UnboundedReceiverStream::new(rx), Duration::from_millis(50));
+		tokio::spawn(async move {
+			let rx = Debounce::new(UnboundedReceiverStream::new(input), Duration::from_millis(50));
 			pin!(rx);
 
 			while let Some(Ok(s)) | Some(Err(InputError::Typed(s))) = rx.next().await {
 				emit!(Call(
-					Cmd::args("mgr:find_do", &[s])
-						.with_bool("previous", opt.prev)
-						.with_bool("smart", opt.case == FilterCase::Smart)
-						.with_bool("insensitive", opt.case == FilterCase::Insensitive)
+					Cmd::args("mgr:find_do", [s])
+						.with("previous", opt.prev)
+						.with("smart", opt.case == FilterCase::Smart)
+						.with("insensitive", opt.case == FilterCase::Insensitive)
 				));
 			}
 		});

@@ -1,11 +1,10 @@
 use std::{borrow::Cow, mem, time::Duration};
 
-use anyhow::bail;
 use tokio::pin;
 use tokio_stream::{StreamExt, wrappers::UnboundedReceiverStream};
 use tracing::error;
 use yazi_config::popup::InputCfg;
-use yazi_fs::{Cha, FilesOp};
+use yazi_fs::{FilesOp, cha::Cha};
 use yazi_plugin::external;
 use yazi_proxy::{AppProxy, InputProxy, MgrProxy, TabProxy, options::{SearchOpt, SearchOptVia}};
 
@@ -13,22 +12,17 @@ use crate::tab::Tab;
 
 impl Tab {
 	pub fn search(&mut self, opt: impl TryInto<SearchOpt>) {
-		let Ok(mut opt) = opt.try_into() else {
+		let Ok(mut opt): Result<SearchOpt, _> = opt.try_into() else {
 			return AppProxy::notify_error("Invalid `search` option", "Failed to parse search option");
 		};
-
-		if opt.via == SearchOptVia::None {
-			return self.search_stop();
-		}
 
 		if let Some(handle) = self.search.take() {
 			handle.abort();
 		}
 
+		let mut input =
+			InputProxy::show(InputCfg::search(opt.via.into_str()).with_value(&*opt.subject));
 		tokio::spawn(async move {
-			let mut input =
-				InputProxy::show(InputCfg::search(&opt.via.to_string()).with_value(opt.subject));
-
 			if let Some(Ok(subject)) = input.recv().await {
 				opt.subject = Cow::Owned(subject);
 				TabProxy::search_do(opt);
@@ -45,7 +39,7 @@ impl Tab {
 			handle.abort();
 		}
 
-		let cwd = self.cwd().to_search(&opt.subject);
+		let cwd = self.cwd().to_search(opt.subject.as_ref());
 		let hidden = self.pref.show_hidden;
 
 		self.search = Some(tokio::spawn(async move {
@@ -68,7 +62,6 @@ impl Tab {
 					subject: opt.subject.into_owned(),
 					args: opt.args,
 				}),
-				SearchOptVia::None => bail!("Invalid `via` option for `search` command"),
 			}?;
 
 			let rx = UnboundedReceiverStream::new(rx).chunks_timeout(5000, Duration::from_millis(500));
@@ -78,7 +71,7 @@ impl Tab {
 			while let Some(chunk) = rx.next().await {
 				FilesOp::Part(cwd.clone(), chunk, ticket).emit();
 			}
-			FilesOp::Done(cwd, Cha::dummy(), ticket).emit();
+			FilesOp::Done(cwd, Cha::default(), ticket).emit();
 
 			Ok(())
 		}));

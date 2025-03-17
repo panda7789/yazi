@@ -1,14 +1,17 @@
 use std::borrow::Cow;
 
-use mlua::{ExternalError, ExternalResult, HookTriggers, IntoLua, ObjectLike, Table, VmState};
+use mlua::{ExternalError, ExternalResult, HookTriggers, IntoLua, ObjectLike, VmState};
 use tokio::{runtime::Handle, select};
 use tokio_util::sync::CancellationToken;
 use tracing::error;
+use yazi_binding::Id;
 use yazi_dds::Sendable;
-use yazi_shared::event::Cmd;
+use yazi_shared::{Ids, event::Cmd};
 
 use super::slim_lua;
 use crate::{file::File, loader::LOADER};
+
+static IDS: Ids = Ids::new();
 
 pub fn spot(
 	cmd: &'static Cmd,
@@ -21,7 +24,7 @@ pub fn spot(
 
 	tokio::task::spawn_blocking(move || {
 		let future = async {
-			LOADER.ensure(&cmd.name).await.into_lua_err()?;
+			LOADER.ensure(&cmd.name, |_| ()).await.into_lua_err()?;
 
 			let lua = slim_lua(&cmd.name)?;
 			lua.set_hook(
@@ -35,33 +38,27 @@ pub fn spot(
 				},
 			);
 
-			let plugin: Table = if let Some(b) = LOADER.read().get(&cmd.name) {
-				lua.load(b.as_bytes()).set_name(&cmd.name).call(())?
-			} else {
-				return Err("unloaded plugin".into_lua_err());
-			};
-
+			let plugin = LOADER.load_once(&lua, &cmd.name)?;
 			let job = lua.create_table_from([
+				("id", Id(IDS.next()).into_lua(&lua)?),
 				("args", Sendable::args_to_table_ref(&lua, &cmd.args)?.into_lua(&lua)?),
-				("file", File(file).into_lua(&lua)?),
+				("file", File::new(file).into_lua(&lua)?),
 				("mime", mime.into_lua(&lua)?),
 				("skip", skip.into_lua(&lua)?),
 			])?;
+
 			if ct2.is_cancelled() { Ok(()) } else { plugin.call_async_method("spot", job).await }
 		};
 
-		let result = Handle::current().block_on(async {
+		Handle::current().block_on(async {
 			select! {
-				_ = ct2.cancelled() => Ok(()),
-				r = future => r,
+				_ = ct2.cancelled() => {},
+				Err(e) = future => if !e.to_string().contains("Spot task cancelled") {
+					error!("{e}");
+				},
+				else => {}
 			}
 		});
-
-		if let Err(e) = result {
-			if !e.to_string().contains("Spot task cancelled") {
-				error!("{e}");
-			}
-		}
 	});
 
 	ct

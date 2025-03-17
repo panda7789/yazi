@@ -20,11 +20,7 @@ impl Selected {
 	#[inline]
 	pub fn add(&mut self, url: &Url) -> bool { self.add_same(&[url]) == 1 }
 
-	pub fn add_many(&mut self, urls: &[impl AsRef<Url>], same: bool) -> usize {
-		if same {
-			return self.add_same(urls);
-		}
-
+	pub fn add_many(&mut self, urls: &[impl AsRef<Url>]) -> usize {
 		let mut grouped: HashMap<_, Vec<_>> = Default::default();
 		for u in urls {
 			if let Some(p) = u.as_ref().parent_url() {
@@ -66,22 +62,19 @@ impl Selected {
 	#[inline]
 	pub fn remove(&mut self, url: &Url) -> bool { self.remove_same(&[url]) == 1 }
 
-	pub fn remove_many(&mut self, urls: &[impl AsRef<Url>], same: bool) -> usize {
-		let affected = if same {
-			self.remove_same(urls)
-		} else {
-			let mut grouped: HashMap<_, Vec<_>> = Default::default();
-			for u in urls {
-				if let Some(p) = u.as_ref().parent_url() {
-					grouped.entry(p).or_default().push(u);
-				}
+	pub fn remove_many(&mut self, urls: &[impl AsRef<Url>]) -> usize {
+		let mut grouped: HashMap<_, Vec<_>> = Default::default();
+		for u in urls {
+			if let Some(p) = u.as_ref().parent_url() {
+				grouped.entry(p).or_default().push(u);
 			}
-			grouped.into_values().map(|v| self.remove_same(&v)).sum()
-		};
+		}
 
+		let affected = grouped.into_values().map(|v| self.remove_same(&v)).sum();
 		if affected > 0 {
 			self.inner.sort_unstable_by(|_, a, _, b| a.cmp(b));
 		}
+
 		affected
 	}
 
@@ -113,10 +106,10 @@ impl Selected {
 	pub fn apply_op(&mut self, op: &FilesOp) {
 		let (removal, addition) = op.diff_recoverable(|u| self.contains_key(u));
 		if !removal.is_empty() {
-			self.remove_many(&removal, !op.cwd().is_search());
+			self.remove_many(&removal);
 		}
 		if !addition.is_empty() {
-			self.add_many(&addition, !op.cwd().is_search());
+			self.add_many(&addition);
 		}
 	}
 }
@@ -125,12 +118,14 @@ impl Selected {
 mod tests {
 	use super::*;
 
+	fn url(s: &str) -> Url { Url::try_from(s).unwrap() }
+
 	#[test]
 	fn test_insert_non_conflicting() {
 		let mut s = Selected::default();
 
-		assert!(s.add(&Url::from("/a/b")));
-		assert!(s.add(&Url::from("/c/d")));
+		assert!(s.add(&url("/a/b")));
+		assert!(s.add(&url("/c/d")));
 		assert_eq!(s.inner.len(), 2);
 	}
 
@@ -138,27 +133,27 @@ mod tests {
 	fn test_insert_conflicting_parent() {
 		let mut s = Selected::default();
 
-		assert!(s.add(&Url::from("/a")));
-		assert!(!s.add(&Url::from("/a/b")));
+		assert!(s.add(&url("/a")));
+		assert!(!s.add(&url("/a/b")));
 	}
 
 	#[test]
 	fn test_insert_conflicting_child() {
 		let mut s = Selected::default();
 
-		assert!(s.add(&Url::from("/a/b/c")));
-		assert!(!s.add(&Url::from("/a/b")));
-		assert!(s.add(&Url::from("/a/b/d")));
+		assert!(s.add(&url("/a/b/c")));
+		assert!(!s.add(&url("/a/b")));
+		assert!(s.add(&url("/a/b/d")));
 	}
 
 	#[test]
 	fn test_remove() {
 		let mut s = Selected::default();
 
-		assert!(s.add(&Url::from("/a/b")));
-		assert!(!s.remove(&Url::from("/a/c")));
-		assert!(s.remove(&Url::from("/a/b")));
-		assert!(!s.remove(&Url::from("/a/b")));
+		assert!(s.add(&url("/a/b")));
+		assert!(!s.remove(&url("/a/c")));
+		assert!(s.remove(&url("/a/b")));
+		assert!(!s.remove(&url("/a/b")));
 		assert!(s.inner.is_empty());
 		assert!(s.parents.is_empty());
 	}
@@ -169,11 +164,7 @@ mod tests {
 
 		assert_eq!(
 			3,
-			s.add_same(&[
-				&Url::from("/parent/child1"),
-				&Url::from("/parent/child2"),
-				&Url::from("/parent/child3")
-			])
+			s.add_same(&[&url("/parent/child1"), &url("/parent/child2"), &url("/parent/child3")])
 		);
 	}
 
@@ -181,16 +172,16 @@ mod tests {
 	fn insert_many_with_existing_parent_fails() {
 		let mut s = Selected::default();
 
-		s.add(&Url::from("/parent"));
-		assert_eq!(0, s.add_same(&[&Url::from("/parent/child1"), &Url::from("/parent/child2")]));
+		s.add(&url("/parent"));
+		assert_eq!(0, s.add_same(&[&url("/parent/child1"), &url("/parent/child2")]));
 	}
 
 	#[test]
 	fn insert_many_with_existing_child_fails() {
 		let mut s = Selected::default();
 
-		s.add(&Url::from("/parent/child1"));
-		assert_eq!(2, s.add_same(&[&Url::from("/parent/child1"), &Url::from("/parent/child2")]));
+		s.add(&url("/parent/child1"));
+		assert_eq!(2, s.add_same(&[&url("/parent/child1"), &url("/parent/child2")]));
 	}
 
 	#[test]
@@ -204,51 +195,48 @@ mod tests {
 	fn insert_many_with_parent_as_child_of_another_url() {
 		let mut s = Selected::default();
 
-		s.add(&Url::from("/parent/child"));
-		assert_eq!(
-			0,
-			s.add_same(&[&Url::from("/parent/child/child1"), &Url::from("/parent/child/child2")])
-		);
+		s.add(&url("/parent/child"));
+		assert_eq!(0, s.add_same(&[&url("/parent/child/child1"), &url("/parent/child/child2")]));
 	}
 	#[test]
 	fn insert_many_with_direct_parent_fails() {
 		let mut s = Selected::default();
 
-		s.add(&Url::from("/a"));
-		assert_eq!(0, s.add_same(&[&Url::from("/a/b")]));
+		s.add(&url("/a"));
+		assert_eq!(0, s.add_same(&[&url("/a/b")]));
 	}
 
 	#[test]
 	fn insert_many_with_nested_child_fails() {
 		let mut s = Selected::default();
 
-		s.add(&Url::from("/a/b"));
-		assert_eq!(0, s.add_same(&[&Url::from("/a")]));
-		assert_eq!(1, s.add_same(&[&Url::from("/b"), &Url::from("/a")]));
+		s.add(&url("/a/b"));
+		assert_eq!(0, s.add_same(&[&url("/a")]));
+		assert_eq!(1, s.add_same(&[&url("/b"), &url("/a")]));
 	}
 
 	#[test]
 	fn insert_many_sibling_directories_success() {
 		let mut s = Selected::default();
 
-		assert_eq!(2, s.add_same(&[&Url::from("/a/b"), &Url::from("/a/c")]));
+		assert_eq!(2, s.add_same(&[&url("/a/b"), &url("/a/c")]));
 	}
 
 	#[test]
 	fn insert_many_with_grandchild_fails() {
 		let mut s = Selected::default();
 
-		s.add(&Url::from("/a/b"));
-		assert_eq!(0, s.add_same(&[&Url::from("/a/b/c")]));
+		s.add(&url("/a/b"));
+		assert_eq!(0, s.add_same(&[&url("/a/b/c")]));
 	}
 
 	#[test]
 	fn test_insert_many_with_remove() {
 		let mut s = Selected::default();
 
-		let child1 = Url::from("/parent/child1");
-		let child2 = Url::from("/parent/child2");
-		let child3 = Url::from("/parent/child3");
+		let child1 = url("/parent/child1");
+		let child2 = url("/parent/child2");
+		let child3 = url("/parent/child3");
 		assert_eq!(3, s.add_same(&[&child1, &child2, &child3]));
 
 		assert!(s.remove(&child1));

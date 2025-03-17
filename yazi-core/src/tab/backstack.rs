@@ -1,25 +1,25 @@
 #[derive(Default)]
-pub struct Backstack<T: Eq> {
+pub struct Backstack<T> {
 	cursor: usize,
 	stack:  Vec<T>,
 }
 
-impl<T: Eq> Backstack<T> {
-	pub fn push(&mut self, item: T) {
+impl<T: Eq + Clone> Backstack<T> {
+	pub fn push(&mut self, item: &T) {
 		if self.stack.is_empty() {
-			self.stack.push(item);
+			self.stack.push(item.clone());
 			return;
 		}
 
-		if self.stack[self.cursor] == item {
+		if self.stack[self.cursor] == *item {
 			return;
 		}
 
 		self.cursor += 1;
 		if self.cursor == self.stack.len() {
-			self.stack.push(item);
+			self.stack.push(item.clone());
 		} else {
-			self.stack[self.cursor] = item;
+			self.stack[self.cursor] = item.clone();
 			self.stack.truncate(self.cursor + 1);
 		}
 
@@ -41,7 +41,7 @@ impl<T: Eq> Backstack<T> {
 	}
 
 	pub fn shift_forward(&mut self) -> Option<&T> {
-		if self.cursor + 1 == self.stack.len() {
+		if self.cursor + 1 >= self.stack.len() {
 			None
 		} else {
 			self.cursor += 1;
@@ -56,12 +56,14 @@ mod tests {
 
 	#[test]
 	fn test_backstack() {
-		let mut bs = Backstack::default();
-		bs.push(1);
+		let mut bs: Backstack<u32> = Backstack::default();
+		assert_eq!(bs.shift_forward(), None);
+
+		bs.push(&1);
 		assert_eq!(bs.stack[bs.cursor], 1);
 
-		bs.push(2);
-		bs.push(3);
+		bs.push(&2);
+		bs.push(&3);
 		assert_eq!(bs.stack[bs.cursor], 3);
 
 		assert_eq!(bs.shift_backward(), Some(&2));
@@ -74,7 +76,7 @@ mod tests {
 		assert_eq!(bs.shift_forward(), None);
 
 		bs.shift_backward();
-		bs.push(4);
+		bs.push(&4);
 
 		assert_eq!(bs.stack[bs.cursor], 4);
 		assert_eq!(bs.shift_forward(), None);

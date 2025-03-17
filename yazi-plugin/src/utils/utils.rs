@@ -5,9 +5,10 @@ use crate::Composer;
 pub(super) struct Utils;
 
 pub fn compose(lua: &Lua, isolate: bool) -> mlua::Result<Value> {
-	Composer::make(lua, 45, move |lua, key| {
+	Composer::make(lua, move |lua, key| {
 		match key {
 			// App
+			b"id" => Utils::id(lua)?,
 			b"hide" => Utils::hide(lua)?,
 
 			// Cache
@@ -15,11 +16,9 @@ pub fn compose(lua: &Lua, isolate: bool) -> mlua::Result<Value> {
 
 			// Call
 			b"render" => Utils::render(lua)?,
-			b"redraw_with" => Utils::redraw_with(lua)?,
-			b"app_emit" => Utils::app_emit(lua)?,
+			b"emit" => Utils::emit(lua)?,
 			b"mgr_emit" => Utils::mgr_emit(lua)?,
 			b"manager_emit" => Utils::mgr_emit(lua)?, // TODO: remove this in the future
-			b"input_emit" => Utils::input_emit(lua)?,
 
 			// Image
 			b"image_info" => Utils::image_info(lua)?,
@@ -42,7 +41,10 @@ pub fn compose(lua: &Lua, isolate: bool) -> mlua::Result<Value> {
 
 			// Preview
 			b"preview_code" => Utils::preview_code(lua)?,
-			b"preview_widgets" => Utils::preview_widgets(lua)?,
+			b"preview_widget" => Utils::preview_widget(lua)?,
+
+			// Process
+			b"proc_info" => Utils::proc_info(lua)?,
 
 			// Spot
 			b"spot_table" => Utils::spot_table(lua)?,
@@ -59,8 +61,7 @@ pub fn compose(lua: &Lua, isolate: bool) -> mlua::Result<Value> {
 			b"target_family" => Utils::target_family(lua)?,
 
 			// Text
-			b"md5" => Utils::hash(lua, true)?, // TODO: deprecate this in the future
-			b"hash" => Utils::hash(lua, false)?,
+			b"hash" => Utils::hash(lua)?,
 			b"quote" => Utils::quote(lua)?,
 			b"truncate" => Utils::truncate(lua)?,
 			b"clipboard" => Utils::clipboard(lua)?,

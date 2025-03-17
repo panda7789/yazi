@@ -3,23 +3,26 @@ use std::{fmt::Display, io::Write, str::FromStr};
 use anyhow::{Result, anyhow};
 use yazi_boot::BOOT;
 use yazi_macro::emit;
-use yazi_shared::event::Cmd;
+use yazi_shared::{Id, event::Cmd};
 
 use crate::{ID, body::Body};
 
 #[derive(Debug)]
 pub struct Payload<'a> {
-	pub receiver: u64,
-	pub sender:   u64,
+	pub receiver: Id,
+	pub sender:   Id,
 	pub body:     Body<'a>,
 }
 
 impl<'a> Payload<'a> {
-	pub(super) fn new(body: Body<'a>) -> Self { Self { receiver: 0, sender: *ID, body } }
+	pub(super) fn new(body: Body<'a>) -> Self { Self { receiver: Id(0), sender: *ID, body } }
 
-	pub(super) fn flush(&self) { writeln!(std::io::stdout(), "{self}").ok(); }
+	pub(super) fn flush(&self) -> Result<()> {
+		writeln!(std::io::stdout(), "{self}")?;
+		Ok(())
+	}
 
-	pub(super) fn try_flush(&self) {
+	pub(super) fn try_flush(&self) -> Result<()> {
 		let b = if self.receiver == 0 {
 			BOOT.remote_events.contains(self.body.kind())
 		} else if let Body::Custom(b) = &self.body {
@@ -27,27 +30,25 @@ impl<'a> Payload<'a> {
 		} else {
 			false
 		};
-
-		if b {
-			self.flush();
-		}
+		if b { self.flush() } else { Ok(()) }
 	}
 
-	pub(super) fn with_receiver(mut self, receiver: u64) -> Self {
+	pub(super) fn with_receiver(mut self, receiver: Id) -> Self {
 		self.receiver = receiver;
 		self
 	}
 
-	pub(super) fn with_sender(mut self, sender: u64) -> Self {
+	pub(super) fn with_sender(mut self, sender: Id) -> Self {
 		self.sender = sender;
 		self
 	}
 }
 
 impl Payload<'static> {
-	pub(super) fn emit(self) {
-		self.try_flush();
+	pub(super) fn emit(self) -> Result<()> {
+		self.try_flush()?;
 		emit!(Call(Cmd::new("app:accept_payload").with_any("payload", self)));
+		Ok(())
 	}
 }
 

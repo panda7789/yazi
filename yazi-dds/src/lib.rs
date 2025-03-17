@@ -8,7 +8,7 @@ pub fn init() {
 	let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
 	// Client
-	ID.init(yazi_boot::ARGS.client_id.unwrap_or(yazi_shared::timestamp_us()));
+	ID.init(yazi_boot::ARGS.client_id.unwrap_or(yazi_shared::Id::unique()));
 	PEERS.with(<_>::default);
 	QUEUE_TX.init(tx);
 	QUEUE_RX.init(rx);
@@ -22,14 +22,16 @@ pub fn init() {
 	REMOTE.with(<_>::default);
 
 	// Env
-	if let Some(s) = std::env::var("YAZI_ID").ok().filter(|s| !s.is_empty()) {
-		std::env::set_var("YAZI_PID", s);
+	unsafe {
+		if let Some(s) = std::env::var("YAZI_ID").ok().filter(|s| !s.is_empty()) {
+			std::env::set_var("YAZI_PID", s);
+		}
+		std::env::set_var("YAZI_ID", ID.to_string());
+		std::env::set_var(
+			"YAZI_LEVEL",
+			(std::env::var("YAZI_LEVEL").unwrap_or_default().parse().unwrap_or(0u16) + 1).to_string(),
+		);
 	}
-	std::env::set_var("YAZI_ID", ID.to_string());
-	std::env::set_var(
-		"YAZI_LEVEL",
-		(std::env::var("YAZI_LEVEL").unwrap_or_default().parse().unwrap_or(0u16) + 1).to_string(),
-	);
 }
 
 pub fn serve() {

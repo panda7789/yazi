@@ -1,9 +1,12 @@
 use yazi_shared::event::CmdCow;
 
+use super::cd::CdSource;
 use crate::tab::Tab;
 
 impl Tab {
 	pub fn back(&mut self, _: CmdCow) {
-		self.backstack.shift_backward().cloned().map(|u| self.cd(u));
+		if let Some(u) = self.backstack.shift_backward().cloned() {
+			self.cd((u, CdSource::Back));
+		}
 	}
 }

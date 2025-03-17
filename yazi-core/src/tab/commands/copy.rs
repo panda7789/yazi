@@ -6,15 +6,17 @@ use yazi_shared::event::CmdCow;
 use crate::tab::Tab;
 
 struct Opt {
-	type_:     Cow<'static, str>,
+	r#type:    Cow<'static, str>,
 	separator: Separator,
+	hovered:   bool,
 }
 
 impl From<CmdCow> for Opt {
 	fn from(mut c: CmdCow) -> Self {
 		Self {
-			type_:     c.take_first_str().unwrap_or_default(),
+			r#type:    c.take_first_str().unwrap_or_default(),
 			separator: c.str("separator").unwrap_or_default().into(),
+			hovered:   c.bool("hovered"),
 		}
 	}
 }
@@ -27,9 +29,15 @@ impl Tab {
 		}
 
 		let mut s = OsString::new();
-		let mut it = self.selected_or_hovered().peekable();
+		let mut it = if opt.hovered {
+			Box::new(self.hovered().map(|h| &h.url).into_iter())
+		} else {
+			self.selected_or_hovered()
+		}
+		.peekable();
+
 		while let Some(u) = it.next() {
-			s.push(match opt.type_.as_ref() {
+			s.push(match opt.r#type.as_ref() {
 				"path" => opt.separator.transform(u),
 				"dirname" => opt.separator.transform(u.parent().unwrap_or(Path::new(""))),
 				"filename" => opt.separator.transform(u.name()),
@@ -42,7 +50,7 @@ impl Tab {
 		}
 
 		// Copy the CWD path regardless even if the directory is empty
-		if s.is_empty() && opt.type_ == "dirname" {
+		if s.is_empty() && opt.r#type == "dirname" {
 			s.push(self.cwd());
 		}
 
@@ -67,7 +75,7 @@ impl From<&str> for Separator {
 }
 
 impl Separator {
-	fn transform<T: AsRef<Path> + ?Sized>(self, p: &T) -> Cow<OsStr> {
+	fn transform<T: AsRef<Path> + ?Sized>(self, p: &T) -> Cow<'_, OsStr> {
 		#[cfg(windows)]
 		if self == Self::Unix {
 			return match yazi_fs::backslash_to_slash(p.as_ref()) {

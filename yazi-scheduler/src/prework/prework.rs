@@ -4,40 +4,44 @@ use anyhow::{Result, anyhow};
 use lru::LruCache;
 use parking_lot::{Mutex, RwLock};
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::error;
 use yazi_config::Priority;
-use yazi_fs::{FilesOp, calculate_size};
+use yazi_fs::{FilesOp, SizeCalculator};
 use yazi_plugin::isolate;
-use yazi_shared::{event::CmdCow, url::Url};
+use yazi_shared::{Id, event::CmdCow, url::Url};
 
-use super::{PreworkOp, PreworkOpFetch, PreworkOpLoad, PreworkOpSize};
+use super::{PreworkIn, PreworkInFetch, PreworkInLoad, PreworkInSize};
 use crate::{HIGH, NORMAL, TaskOp, TaskProg};
 
 pub struct Prework {
-	macro_: async_priority_channel::Sender<TaskOp, u8>,
-	prog:   mpsc::UnboundedSender<TaskProg>,
+	r#macro: async_priority_channel::Sender<TaskOp, u8>,
+	prog:    mpsc::UnboundedSender<TaskProg>,
 
-	pub loaded:       Mutex<LruCache<u64, u32>>,
-	pub size_loading: RwLock<HashSet<Url>>,
+	pub loaded:  Mutex<LruCache<u64, u32>>,
+	pub loading: Mutex<LruCache<u64, CancellationToken>>,
+	pub sizing:  RwLock<HashSet<Url>>,
 }
 
 impl Prework {
 	pub fn new(
-		macro_: async_priority_channel::Sender<TaskOp, u8>,
+		r#macro: async_priority_channel::Sender<TaskOp, u8>,
 		prog: mpsc::UnboundedSender<TaskProg>,
 	) -> Self {
 		Self {
-			macro_,
+			r#macro,
 			prog,
 			loaded: Mutex::new(LruCache::new(NonZeroUsize::new(4096).unwrap())),
-			size_loading: Default::default(),
+			loading: Mutex::new(LruCache::new(NonZeroUsize::new(256).unwrap())),
+			sizing: Default::default(),
 		}
 	}
 
-	pub async fn work(&self, op: PreworkOp) -> Result<()> {
-		match op {
-			PreworkOp::Fetch(task) => {
-				let hashes: Vec<_> = task.targets.iter().map(|f| f.hash()).collect();
+	pub async fn work(&self, r#in: PreworkIn) -> Result<()> {
+		let id = r#in.id();
+		match r#in {
+			PreworkIn::Fetch(task) => {
+				let hashes: Vec<_> = task.targets.iter().map(|f| f.hash_u64()).collect();
 				let result = isolate::fetch(CmdCow::from(&task.plugin.run), task.targets).await;
 				if let Err(e) = result {
 					self.fail(task.id, format!("Failed to run fetcher `{}`:\n{e}", task.plugin.run.name))?;
@@ -52,11 +56,15 @@ impl Prework {
 				if let Some(e) = err {
 					error!("Error when running fetcher `{}`:\n{e}", task.plugin.run.name);
 				}
-				self.prog.send(TaskProg::Adv(task.id, 1, 0))?;
 			}
-			PreworkOp::Load(task) => {
-				let hash = task.target.hash();
-				let result = isolate::preload(&task.plugin.run, task.target).await;
+			PreworkIn::Load(task) => {
+				let ct = CancellationToken::new();
+				if let Some(ct) = self.loading.lock().put(task.target.url.hash_u64(), ct.clone()) {
+					ct.cancel();
+				}
+
+				let hash = task.target.hash_u64();
+				let result = isolate::preload(&task.plugin.run, task.target, ct).await;
 				if let Err(e) = result {
 					self
 						.fail(task.id, format!("Failed to run preloader `{}`:\n{e}", task.plugin.run.name))?;
@@ -70,13 +78,12 @@ impl Prework {
 				if let Some(e) = err {
 					error!("Error when running preloader `{}`:\n{e}", task.plugin.run.name);
 				}
-				self.prog.send(TaskProg::Adv(task.id, 1, 0))?;
 			}
-			PreworkOp::Size(task) => {
-				let length = calculate_size(&task.target).await;
+			PreworkIn::Size(task) => {
+				let length = SizeCalculator::total(&task.target).await.unwrap_or(0);
 				task.throttle.done((task.target, length), |buf| {
 					{
-						let mut loading = self.size_loading.write();
+						let mut loading = self.sizing.write();
 						for (path, _) in &buf {
 							loading.remove(path);
 						}
@@ -89,56 +96,55 @@ impl Prework {
 					)
 					.emit();
 				});
-				self.prog.send(TaskProg::Adv(task.id, 1, 0))?;
 			}
 		}
-		Ok(())
+		Ok(self.prog.send(TaskProg::Adv(id, 1, 0))?)
 	}
 
-	pub async fn fetch(&self, task: PreworkOpFetch) -> Result<()> {
+	pub async fn fetch(&self, task: PreworkInFetch) -> Result<()> {
 		let id = task.id;
 		self.prog.send(TaskProg::New(id, 0))?;
 
 		match task.plugin.prio {
-			Priority::Low => self.queue(PreworkOp::Fetch(task), NORMAL).await?,
-			Priority::Normal => self.queue(PreworkOp::Fetch(task), HIGH).await?,
-			Priority::High => self.work(PreworkOp::Fetch(task)).await?,
+			Priority::Low => self.queue(PreworkIn::Fetch(task), NORMAL).await?,
+			Priority::Normal => self.queue(PreworkIn::Fetch(task), HIGH).await?,
+			Priority::High => self.work(PreworkIn::Fetch(task)).await?,
 		}
 		self.succ(id)
 	}
 
-	pub async fn load(&self, task: PreworkOpLoad) -> Result<()> {
+	pub async fn load(&self, task: PreworkInLoad) -> Result<()> {
 		let id = task.id;
 		self.prog.send(TaskProg::New(id, 0))?;
 
 		match task.plugin.prio {
-			Priority::Low => self.queue(PreworkOp::Load(task), NORMAL).await?,
-			Priority::Normal => self.queue(PreworkOp::Load(task), HIGH).await?,
-			Priority::High => self.work(PreworkOp::Load(task)).await?,
+			Priority::Low => self.queue(PreworkIn::Load(task), NORMAL).await?,
+			Priority::Normal => self.queue(PreworkIn::Load(task), HIGH).await?,
+			Priority::High => self.work(PreworkIn::Load(task)).await?,
 		}
 		self.succ(id)
 	}
 
-	pub async fn size(&self, task: PreworkOpSize) -> Result<()> {
+	pub async fn size(&self, task: PreworkInSize) -> Result<()> {
 		let id = task.id;
 
 		self.prog.send(TaskProg::New(id, 0))?;
-		self.work(PreworkOp::Size(task)).await?;
+		self.work(PreworkIn::Size(task)).await?;
 		self.succ(id)
 	}
 }
 
 impl Prework {
 	#[inline]
-	fn succ(&self, id: usize) -> Result<()> { Ok(self.prog.send(TaskProg::Succ(id))?) }
+	fn succ(&self, id: Id) -> Result<()> { Ok(self.prog.send(TaskProg::Succ(id))?) }
 
 	#[inline]
-	fn fail(&self, id: usize, reason: String) -> Result<()> {
+	fn fail(&self, id: Id, reason: String) -> Result<()> {
 		Ok(self.prog.send(TaskProg::Fail(id, reason))?)
 	}
 
 	#[inline]
-	async fn queue(&self, op: impl Into<TaskOp>, priority: u8) -> Result<()> {
-		self.macro_.send(op.into(), priority).await.map_err(|_| anyhow!("Failed to send task"))
+	async fn queue(&self, r#in: impl Into<TaskOp>, priority: u8) -> Result<()> {
+		self.r#macro.send(r#in.into(), priority).await.map_err(|_| anyhow!("Failed to send task"))
 	}
 }

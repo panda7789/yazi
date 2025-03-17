@@ -11,15 +11,16 @@ function Current:new(area, tab)
 end
 
 function Current:empty()
-	local text
+	local s
 	if self._folder.files.filter then
-		text = ui.Text("No filter results")
+		s = "No filter results"
 	else
-		text = ui.Text(self._folder.stage.is_loading and "Loading..." or "No items")
+		local done, err = self._folder.stage()
+		s = not done and "Loading..." or not err and "No items" or string.format("Error: %s", err)
 	end
 
 	return {
-		text:area(self._area):align(ui.Text.CENTER),
+		ui.Line(s):area(self._area):align(ui.Align.CENTER),
 	}
 end
 
@@ -31,15 +32,18 @@ function Current:redraw()
 		return self:empty()
 	end
 
-	local entities, linemodes = {}, {}
+	local left, right = {}, {}
 	for _, f in ipairs(files) do
-		entities[#entities + 1] = Entity:new(f):redraw()
-		linemodes[#linemodes + 1] = Linemode:new(f):redraw()
+		local entity = Entity:new(f)
+		left[#left + 1], right[#right + 1] = entity:redraw(), Linemode:new(f):redraw()
+
+		local max = math.max(0, self._area.w - right[#right]:width())
+		left[#left]:truncate { max = max, ellipsis = entity:ellipsis(max) }
 	end
 
 	return {
-		ui.List(entities):area(self._area),
-		ui.Text(linemodes):area(self._area):align(ui.Text.RIGHT),
+		ui.List(left):area(self._area),
+		ui.Text(right):area(self._area):align(ui.Align.RIGHT),
 	}
 end
 
@@ -55,12 +59,12 @@ function Current:click(event, up)
 		return
 	end
 
-	ya.mgr_emit("arrow", { y + f.offset - f.hovered.idx })
+	ya.emit("arrow", { y + f.offset - f.hovered.idx })
 	if event.is_right then
-		ya.mgr_emit("open", {})
+		ya.emit("open", {})
 	end
 end
 
-function Current:scroll(event, step) ya.mgr_emit("arrow", { step }) end
+function Current:scroll(event, step) ya.emit("arrow", { step }) end
 
 function Current:touch(event, step) end

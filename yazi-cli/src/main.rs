@@ -60,17 +60,30 @@ async fn run() -> anyhow::Result<()> {
 			}
 		}
 
+		Command::Pkg(cmd) => {
+			package::init()?;
+
+			let mut pkg = package::Package::load().await?;
+			match cmd {
+				CommandPkg::Add { ids } => pkg.add_many(&ids).await?,
+				CommandPkg::Delete { ids } => pkg.delete_many(&ids).await?,
+				CommandPkg::Install => pkg.install().await?,
+				CommandPkg::List => pkg.print()?,
+				CommandPkg::Upgrade { ids } => pkg.upgrade_many(&ids).await?,
+			}
+		}
+
 		Command::Pack(cmd) => {
 			package::init()?;
-			package::Package::load().await?.sync().await.ok();
-			if cmd.migrate {
-				outln!("Migration successful")?;
-			} else if cmd.install {
-				package::Package::load().await?.install(false).await?;
+			outln!(
+				"WARNING: `ya pack` is deprecated, use the new `ya pkg` instead. See https://github.com/sxyazi/yazi/pull/2770 for more details."
+			)?;
+			if cmd.install {
+				package::Package::load().await?.install().await?;
 			} else if cmd.list {
 				package::Package::load().await?.print()?;
 			} else if cmd.upgrade {
-				package::Package::load().await?.install(true).await?;
+				package::Package::load().await?.upgrade_many(&[]).await?;
 			} else if let Some(uses) = cmd.add {
 				package::Package::load().await?.add_many(&uses).await?;
 			} else if let Some(uses) = cmd.delete {

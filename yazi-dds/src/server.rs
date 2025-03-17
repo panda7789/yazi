@@ -3,11 +3,12 @@ use std::{collections::HashMap, str::FromStr, time::Duration};
 use anyhow::Result;
 use parking_lot::RwLock;
 use tokio::{io::{AsyncBufReadExt, AsyncWriteExt, BufReader}, select, sync::mpsc::{self, UnboundedReceiver}, task::JoinHandle, time};
-use yazi_shared::RoCell;
+use yazi_macro::try_format;
+use yazi_shared::{Id, RoCell};
 
 use crate::{Client, ClientWriter, Payload, Peer, STATE, Stream, body::{Body, BodyBye, BodyHey}};
 
-pub(super) static CLIENTS: RoCell<RwLock<HashMap<u64, Client>>> = RoCell::new();
+pub(super) static CLIENTS: RoCell<RwLock<HashMap<Id, Client>>> = RoCell::new();
 
 pub(super) struct Server;
 
@@ -87,7 +88,7 @@ impl Server {
 		}))
 	}
 
-	fn handle_hi(s: String, id: &mut Option<u64>, tx: mpsc::UnboundedSender<String>) {
+	fn handle_hi(s: String, id: &mut Option<Id>, tx: mpsc::UnboundedSender<String>) {
 		let Ok(payload) = Payload::from_str(&s) else { return };
 		let Body::Hi(hi) = payload.body else { return };
 
@@ -108,27 +109,26 @@ impl Server {
 		Self::handle_hey(&clients);
 	}
 
-	fn handle_hey(clients: &HashMap<u64, Client>) {
-		let payload = format!(
-			"{}\n",
-			Payload::new(BodyHey::owned(
-				clients.values().map(|c| (c.id, Peer::new(&c.abilities))).collect()
-			))
-		);
-		clients.values().for_each(|c| _ = c.tx.send(payload.clone()));
+	fn handle_hey(clients: &HashMap<Id, Client>) {
+		let payload = Payload::new(BodyHey::owned(
+			clients.values().map(|c| (c.id, Peer::new(&c.abilities))).collect(),
+		));
+		if let Ok(s) = try_format!("{payload}\n") {
+			clients.values().for_each(|c| _ = c.tx.send(s.clone()));
+		}
 	}
 
-	async fn handle_bye(id: u64, mut rx: UnboundedReceiver<String>, mut writer: ClientWriter) {
+	async fn handle_bye(id: Id, mut rx: UnboundedReceiver<String>, mut writer: ClientWriter) {
 		while let Ok(payload) = rx.try_recv() {
 			if writer.write_all(payload.as_bytes()).await.is_err() {
 				break;
 			}
 		}
 
-		_ = writer
-			.write_all(BodyBye::owned().with_receiver(id).with_sender(0).to_string().as_bytes())
-			.await;
-
-		writer.flush().await.ok();
+		let bye = BodyBye::owned().with_receiver(id).with_sender(Id(0));
+		if let Ok(s) = try_format!("{bye}") {
+			writer.write_all(s.as_bytes()).await.ok();
+			writer.flush().await.ok();
+		}
 	}
 }

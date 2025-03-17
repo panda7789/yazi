@@ -1,19 +1,22 @@
-use std::{borrow::Cow, collections::HashMap, ffi::{OsStr, OsString}, io::{BufWriter, Write, stderr}, path::PathBuf};
+use std::{borrow::Cow, collections::HashMap, ffi::{OsStr, OsString}, io::{Read, Write}, path::PathBuf};
 
 use anyhow::{Result, anyhow};
+use crossterm::{execute, style::Print};
 use scopeguard::defer;
-use tokio::{fs::{self, OpenOptions}, io::{AsyncReadExt, AsyncWriteExt, stdin}};
-use yazi_config::{OPEN, PREVIEW};
+use tokio::{fs::{self, OpenOptions}, io::AsyncWriteExt};
+use yazi_config::YAZI;
 use yazi_dds::Pubsub;
 use yazi_fs::{File, FilesOp, max_common_root, maybe_exists, paths_to_same_file};
+use yazi_macro::err;
 use yazi_proxy::{AppProxy, HIDER, TasksProxy, WATCHER};
 use yazi_shared::{terminal_clear, url::Url};
+use yazi_term::tty::TTY;
 
 use crate::mgr::Mgr;
 
 impl Mgr {
 	pub(super) fn bulk_rename(&self) {
-		let Some(opener) = OPEN.block_opener("bulk-rename.txt", "text/plain") else {
+		let Some(opener) = YAZI.opener.block(YAZI.open.all("bulk-rename.txt", "text/plain")) else {
 			return AppProxy::notify_warn("Bulk rename", "No text opener found");
 		};
 
@@ -24,7 +27,7 @@ impl Mgr {
 
 		let cwd = self.cwd().clone();
 		tokio::spawn(async move {
-			let tmp = PREVIEW.tmpfile("bulk");
+			let tmp = YAZI.preview.tmpfile("bulk");
 			let s = old.iter().map(|o| o.as_os_str()).collect::<Vec<_>>().join(OsStr::new("\n"));
 			OpenOptions::new()
 				.write(true)
@@ -45,16 +48,20 @@ impl Mgr {
 			defer!(AppProxy::resume());
 			AppProxy::stop().await;
 
-			let new: Vec<_> = fs::read_to_string(&tmp).await?.lines().map(PathBuf::from).collect();
+			let new: Vec<_> =
+				fs::read_to_string(&tmp).await?.lines().take(old.len()).map(PathBuf::from).collect();
 			Self::bulk_rename_do(root, old, new).await
 		});
 	}
 
 	async fn bulk_rename_do(root: PathBuf, old: Vec<PathBuf>, new: Vec<PathBuf>) -> Result<()> {
-		terminal_clear(&mut stderr())?;
+		terminal_clear(TTY.writer())?;
 		if old.len() != new.len() {
-			eprintln!("Number of old and new differ, press ENTER to exit");
-			stdin().read_exact(&mut [0]).await?;
+			#[rustfmt::skip]
+			let s = format!("Number of new and old file names mismatch (New: {}, Old: {}).\nPress <Enter> to exit...", new.len(), old.len());
+			execute!(TTY.writer(), Print(s))?;
+
+			TTY.reader().read_exact(&mut [0])?;
 			return Ok(());
 		}
 
@@ -65,16 +72,16 @@ impl Mgr {
 		}
 
 		{
-			let mut stderr = BufWriter::new(stderr().lock());
-			for (o, n) in &todo {
-				writeln!(stderr, "{} -> {}", o.display(), n.display())?;
+			let mut w = TTY.lockout();
+			for (old, new) in &todo {
+				writeln!(w, "{} -> {}", old.display(), new.display())?;
 			}
-			write!(stderr, "Continue to rename? (y/N): ")?;
-			stderr.flush()?;
+			write!(w, "Continue to rename? (y/N): ")?;
+			w.flush()?;
 		}
 
 		let mut buf = [0; 10];
-		_ = stdin().read(&mut buf).await?;
+		_ = TTY.reader().read(&mut buf)?;
 		if buf[0] != b'y' && buf[0] != b'Y' {
 			return Ok(());
 		}
@@ -88,7 +95,7 @@ impl Mgr {
 				failed.push((o, n, anyhow!("Destination already exists")));
 			} else if let Err(e) = fs::rename(&old, &new).await {
 				failed.push((o, n, e.into()));
-			} else if let Ok(f) = File::from(new.into()).await {
+			} else if let Ok(f) = File::new(new.into()).await {
 				succeeded.insert(Url::from(old), f);
 			} else {
 				failed.push((o, n, anyhow!("Failed to retrieve file info")));
@@ -96,7 +103,8 @@ impl Mgr {
 		}
 
 		if !succeeded.is_empty() {
-			Pubsub::pub_from_bulk(succeeded.iter().map(|(o, n)| (o, &n.url)).collect());
+			let map = succeeded.iter().map(|(o, n)| (o, &n.url)).collect();
+			err!(Pubsub::pub_from_bulk(map));
 			FilesOp::rename(succeeded);
 		}
 		drop(permit);
@@ -108,19 +116,17 @@ impl Mgr {
 	}
 
 	async fn output_failed(failed: Vec<(PathBuf, PathBuf, anyhow::Error)>) -> Result<()> {
-		terminal_clear(&mut stderr())?;
+		let mut stdout = TTY.lockout();
+		terminal_clear(&mut *stdout)?;
 
-		{
-			let mut stderr = BufWriter::new(stderr().lock());
-			writeln!(stderr, "Failed to rename:")?;
-			for (o, n, e) in failed {
-				writeln!(stderr, "{} -> {}: {e}", o.display(), n.display())?;
-			}
-			writeln!(stderr, "\nPress ENTER to exit")?;
-			stderr.flush()?;
+		writeln!(stdout, "Failed to rename:")?;
+		for (old, new, err) in failed {
+			writeln!(stdout, "{} -> {}: {err}", old.display(), new.display())?;
 		}
+		writeln!(stdout, "\nPress ENTER to exit")?;
 
-		stdin().read_exact(&mut [0]).await?;
+		stdout.flush()?;
+		TTY.reader().read_exact(&mut [0])?;
 		Ok(())
 	}
 
@@ -139,7 +145,7 @@ impl Mgr {
 		let mut sorted = Vec::with_capacity(old.len());
 		while !todos.is_empty() {
 			// Paths that are non-incomes and don't need to be prioritized in this round
-			let mut outcomes: Vec<_> = incomes.iter().filter(|(_, &b)| !b).map(|(&p, _)| p).collect();
+			let mut outcomes: Vec<_> = incomes.iter().filter(|&(_, b)| !b).map(|(&p, _)| p).collect();
 			outcomes.sort_unstable_by(|a, b| orders[b].cmp(&orders[a]));
 
 			// If there're no outcomes, it means there are cycles in the renaming

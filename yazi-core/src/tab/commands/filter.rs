@@ -30,10 +30,10 @@ impl From<CmdCow> for Opt {
 impl Tab {
 	#[yazi_codegen::command]
 	pub fn filter(&mut self, opt: Opt) {
-		tokio::spawn(async move {
-			let rx = InputProxy::show(InputCfg::filter());
+		let input = InputProxy::show(InputCfg::filter());
 
-			let rx = Debounce::new(UnboundedReceiverStream::new(rx), Duration::from_millis(50));
+		tokio::spawn(async move {
+			let rx = Debounce::new(UnboundedReceiverStream::new(input), Duration::from_millis(50));
 			pin!(rx);
 
 			while let Some(result) = rx.next().await {
@@ -41,10 +41,10 @@ impl Tab {
 				let (Ok(s) | Err(InputError::Typed(s))) = result else { continue };
 
 				emit!(Call(
-					Cmd::args("mgr:filter_do", &[s])
-						.with_bool("smart", opt.case == FilterCase::Smart)
-						.with_bool("insensitive", opt.case == FilterCase::Insensitive)
-						.with_bool("done", done)
+					Cmd::args("mgr:filter_do", [s])
+						.with("smart", opt.case == FilterCase::Smart)
+						.with("insensitive", opt.case == FilterCase::Insensitive)
+						.with("done", done)
 				));
 			}
 		});

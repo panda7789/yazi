@@ -1,12 +1,11 @@
-use crossterm::event::KeyCode;
+use crossterm::{cursor::SetCursorStyle, event::KeyCode};
 use unicode_width::UnicodeWidthStr;
 use yazi_adapter::Dimension;
-use yazi_config::{KEYMAP, keymap::{Chord, Key}};
+use yazi_config::{KEYMAP, YAZI, keymap::{Chord, Key}};
 use yazi_macro::{render, render_and};
 use yazi_shared::Layer;
 
-use super::HELP_MARGIN;
-use crate::input::Input;
+use crate::Scrollable;
 
 #[derive(Default)]
 pub struct Help {
@@ -16,16 +15,13 @@ pub struct Help {
 
 	// Filter
 	pub(super) keyword:   String,
-	pub(super) in_filter: Option<Input>,
+	pub(super) in_filter: Option<yazi_widgets::input::Input>,
 
 	pub(super) offset: usize,
 	pub(super) cursor: usize,
 }
 
 impl Help {
-	#[inline]
-	pub fn limit() -> usize { Dimension::available().rows.saturating_sub(HELP_MARGIN) as usize }
-
 	pub fn toggle(&mut self, layer: Layer) {
 		self.visible = !self.visible;
 		self.layer = layer;
@@ -39,7 +35,7 @@ impl Help {
 		render!();
 	}
 
-	pub fn type_(&mut self, key: &Key) -> bool {
+	pub fn r#type(&mut self, key: &Key) -> bool {
 		let Some(input) = &mut self.in_filter else {
 			return false;
 		};
@@ -57,7 +53,7 @@ impl Help {
 				input.backspace(false);
 			}
 			_ => {
-				input.type_(key);
+				input.r#type(key);
 			}
 		}
 
@@ -89,13 +85,13 @@ impl Help {
 			.as_ref()
 			.map(|i| i.value())
 			.or(Some(self.keyword.as_str()).filter(|&s| !s.is_empty()))
-			.map(|s| format!("Filter: {}", s))
+			.map(|s| format!("Filter: {s}"))
 	}
 
 	// --- Bindings
 	#[inline]
 	pub fn window(&self) -> &[&Chord] {
-		let end = (self.offset + Self::limit()).min(self.bindings.len());
+		let end = (self.offset + self.limit()).min(self.bindings.len());
 		&self.bindings[self.offset..end]
 	}
 
@@ -113,4 +109,13 @@ impl Help {
 
 	#[inline]
 	pub fn rel_cursor(&self) -> usize { self.cursor - self.offset }
+
+	#[inline]
+	pub fn cursor_shape(&self) -> SetCursorStyle {
+		if YAZI.input.cursor_blink {
+			SetCursorStyle::BlinkingBlock
+		} else {
+			SetCursorStyle::SteadyBlock
+		}
+	}
 }

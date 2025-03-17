@@ -1,5 +1,3 @@
-use std::collections::{HashMap, HashSet};
-
 use anyhow::Result;
 use tokio::fs;
 use yazi_config::popup::{ConfirmCfg, InputCfg};
@@ -22,13 +20,12 @@ impl Mgr {
 	#[yazi_codegen::command]
 	pub fn create(&self, opt: Opt) {
 		let cwd = self.cwd().to_owned();
+		let mut input = InputProxy::show(InputCfg::create(opt.dir));
+
 		tokio::spawn(async move {
-			let mut result = InputProxy::show(InputCfg::create(opt.dir));
-			let Some(Ok(name)) = result.recv().await else {
-				return Ok(());
-			};
+			let Some(Ok(name)) = input.recv().await else { return };
 			if name.is_empty() {
-				return Ok(());
+				return;
 			}
 
 			let new = cwd.join(&name);
@@ -36,10 +33,10 @@ impl Mgr {
 				&& maybe_exists(&new).await
 				&& !ConfirmProxy::show(ConfirmCfg::overwrite(&new)).await
 			{
-				return Ok(());
+				return;
 			}
 
-			Self::create_do(new, opt.dir || name.ends_with('/') || name.ends_with('\\')).await
+			_ = Self::create_do(new, opt.dir || name.ends_with('/') || name.ends_with('\\')).await;
 		});
 	}
 
@@ -51,7 +48,7 @@ impl Mgr {
 			fs::create_dir_all(&new).await?;
 		} else if let Some(real) = realname(&new).await {
 			ok_or_not_found(fs::remove_file(&new).await)?;
-			FilesOp::Deleting(parent.clone(), HashSet::from_iter([UrnBuf::from(real)])).emit();
+			FilesOp::Deleting(parent.clone(), [UrnBuf::from(real)].into()).emit();
 			fs::File::create(&new).await?;
 		} else {
 			fs::create_dir_all(&parent).await.ok();
@@ -59,8 +56,8 @@ impl Mgr {
 			fs::File::create(&new).await?;
 		}
 
-		if let Ok(f) = File::from(new.clone()).await {
-			FilesOp::Upserting(parent, HashMap::from_iter([(f.urn_owned(), f)])).emit();
+		if let Ok(f) = File::new(new.clone()).await {
+			FilesOp::Upserting(parent, [(f.urn_owned(), f)].into()).emit();
 			TabProxy::reveal(&new)
 		}
 		Ok(())

@@ -2,7 +2,7 @@ local M = {}
 
 function M:peek(job)
 	local cmd = os.getenv("YAZI_FILE_ONE") or "file"
-	local output, err = Command(cmd):args({ "-bL", "--", tostring(job.file.url) }):stdout(Command.PIPED):output()
+	local output, err = Command(cmd):arg({ "-bL", "--", tostring(job.file.url) }):stdout(Command.PIPED):output()
 
 	local text
 	if output then
@@ -11,7 +11,7 @@ function M:peek(job)
 		text = ui.Text(string.format("Failed to start `%s`, error: %s", cmd, err))
 	end
 
-	ya.preview_widgets(job, { text:area(job.area):wrap(ui.Text.WRAP) })
+	ya.preview_widget(job, text:area(job.area):wrap(ui.Wrap.YES))
 end
 
 function M:seek() end

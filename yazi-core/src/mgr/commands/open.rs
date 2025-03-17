@@ -1,20 +1,18 @@
-use std::{borrow::Cow, ffi::OsString};
+use std::borrow::Cow;
 
 use tracing::error;
-use yazi_boot::ARGS;
-use yazi_config::{OPEN, PLUGIN, popup::PickCfg};
+use yazi_config::{YAZI, popup::PickCfg};
 use yazi_fs::File;
-use yazi_macro::emit;
 use yazi_plugin::isolate;
-use yazi_proxy::{MgrProxy, TasksProxy, options::OpenDoOpt};
-use yazi_shared::{MIME_DIR, event::{CmdCow, EventQuit}, url::Url};
+use yazi_proxy::{MgrProxy, PickProxy, TasksProxy, options::OpenDoOpt};
+use yazi_shared::{MIME_DIR, event::CmdCow, url::Url};
 
 use crate::{mgr::Mgr, tab::Folder, tasks::Tasks};
 
 #[derive(Clone, Copy)]
-struct Opt {
-	interactive: bool,
-	hovered:     bool,
+pub(super) struct Opt {
+	pub(super) interactive: bool,
+	pub(super) hovered:     bool,
 }
 
 impl From<CmdCow> for Opt {
@@ -58,13 +56,13 @@ impl Mgr {
 		tokio::spawn(async move {
 			let mut files = Vec::with_capacity(todo.len());
 			for u in todo {
-				if let Ok(f) = File::from(u).await {
+				if let Ok(f) = File::new(u).await {
 					files.push(f);
 				}
 			}
 
 			done.extend(files.iter().map(|f| (f.url_owned(), "")));
-			for (fetcher, files) in PLUGIN.mime_fetchers(files) {
+			for (fetcher, files) in YAZI.plugin.mime_fetchers(files) {
 				if let Err(e) = isolate::fetch(CmdCow::from(&fetcher.run), files).await {
 					error!("Fetch mime failed on opening: {e}");
 				}
@@ -90,17 +88,15 @@ impl Mgr {
 			return tasks.process_from_files(opt.cwd, opt.hovered, targets);
 		}
 
-		let openers: Vec<_> = OPEN.common_openers(&targets);
+		let openers: Vec<_> = YAZI.opener.all(YAZI.open.common(&targets).into_iter());
 		if openers.is_empty() {
 			return;
 		}
 
+		let pick = PickProxy::show(PickCfg::open(openers.iter().map(|o| o.desc()).collect()));
 		let urls = [opt.hovered].into_iter().chain(targets.into_iter().map(|(u, _)| u)).collect();
 		tokio::spawn(async move {
-			let result = yazi_proxy::PickProxy::show(PickCfg::open(
-				openers.iter().map(|o| o.desc.clone()).collect(),
-			));
-			if let Ok(choice) = result.await {
+			if let Ok(choice) = pick.await {
 				TasksProxy::open_with(Cow::Borrowed(openers[choice]), opt.cwd, urls);
 			}
 		});
@@ -121,20 +117,5 @@ impl Mgr {
 			|| find(self.parent())
 			|| find(self.hovered_folder())
 			|| find(self.active().history.get(&p))
-	}
-
-	fn quit_with_selected(opt: Opt, selected: &[&Url]) -> bool {
-		if opt.interactive || ARGS.chooser_file.is_none() {
-			return false;
-		}
-
-		let paths = selected.iter().fold(OsString::new(), |mut s, &u| {
-			s.push(u.as_os_str());
-			s.push("\n");
-			s
-		});
-
-		emit!(Quit(EventQuit { selected: Some(paths), ..Default::default() }));
-		true
 	}
 }

@@ -6,7 +6,7 @@ use parking_lot::RwLock;
 use tokio::{fs, pin, sync::{mpsc::{self, UnboundedReceiver}, watch}};
 use tokio_stream::{StreamExt, wrappers::UnboundedReceiverStream};
 use tracing::error;
-use yazi_fs::{Cha, File, Files, FilesOp, realname_unchecked};
+use yazi_fs::{File, Files, FilesOp, cha::Cha, realname_unchecked};
 use yazi_proxy::WATCHER;
 use yazi_shared::{RoCell, url::Url};
 
@@ -43,10 +43,9 @@ impl Watcher {
 		}
 
 		#[cfg(any(target_os = "linux", target_os = "macos"))]
-		yazi_fs::mounts::Partitions::monitor(
-			yazi_fs::mounts::PARTITIONS.clone(),
-			yazi_dds::Pubsub::pub_from_mount,
-		);
+		yazi_fs::mounts::Partitions::monitor(yazi_fs::mounts::PARTITIONS.clone(), || {
+			yazi_macro::err!(yazi_dds::Pubsub::pub_from_mount())
+		});
 
 		tokio::spawn(Self::fan_out(out_rx));
 		Self { in_tx, out_tx }
@@ -76,6 +75,7 @@ impl Watcher {
 		}
 	}
 
+	// TODO: performance improvement
 	pub(super) fn trigger_dirs(&self, folders: &[&Folder]) {
 		let todo: Vec<_> =
 			folders.iter().filter(|&f| f.url.is_regular()).map(|&f| (f.url.to_owned(), f.cha)).collect();
@@ -86,8 +86,9 @@ impl Watcher {
 		async fn go(cwd: Url, cha: Cha) {
 			let Some(cha) = Files::assert_stale(&cwd, cha).await else { return };
 
-			if let Ok(files) = Files::from_dir_bulk(&cwd).await {
-				FilesOp::Full(cwd, files, cha).emit();
+			match Files::from_dir_bulk(&cwd).await {
+				Ok(files) => FilesOp::Full(cwd, files, cha).emit(),
+				Err(e) => FilesOp::issue_error(&cwd, e.kind()).await,
 			}
 		}
 
@@ -120,7 +121,7 @@ impl Watcher {
 
 	async fn fan_out(rx: UnboundedReceiver<Url>) {
 		// TODO: revert this once a new notification is implemented
-		let rx = UnboundedReceiverStream::new(rx).chunks_timeout(1000, Duration::from_millis(100));
+		let rx = UnboundedReceiverStream::new(rx).chunks_timeout(1000, Duration::from_millis(250));
 		pin!(rx);
 
 		while let Some(chunk) = rx.next().await {
@@ -132,8 +133,8 @@ impl Watcher {
 
 			for u in urls {
 				let Some((parent, urn)) = u.pair() else { continue };
-				let Ok(file) = File::from(u).await else {
-					ops.push(FilesOp::Deleting(parent, HashSet::from_iter([urn])));
+				let Ok(file) = File::new(u).await else {
+					ops.push(FilesOp::Deleting(parent, [urn].into()));
 					continue;
 				};
 
@@ -142,11 +143,11 @@ impl Watcher {
 					|| realname_unchecked(u, &mut cached).await.is_ok_and(|s| urn.as_urn() == s);
 
 				if !eq {
-					ops.push(FilesOp::Deleting(parent, HashSet::from_iter([urn])));
+					ops.push(FilesOp::Deleting(parent, [urn].into()));
 					continue;
 				}
 
-				ops.push(FilesOp::Upserting(parent, HashMap::from_iter([(urn, file)])));
+				ops.push(FilesOp::Upserting(parent, [(urn, file)].into()));
 			}
 
 			FilesOp::mutate(ops);

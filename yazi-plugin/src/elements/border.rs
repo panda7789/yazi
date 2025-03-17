@@ -1,7 +1,7 @@
-use mlua::{Lua, MetaMethod, Table, UserData, Value};
+use mlua::{AnyUserData, IntoLua, Lua, MetaMethod, Table, UserData, Value};
 use ratatui::widgets::{Borders, Widget};
 
-use super::Area;
+use super::{Area, Edge};
 use crate::elements::Line;
 
 // Type
@@ -16,30 +16,19 @@ const QUADRANT_OUTSIDE: u8 = 5;
 pub struct Border {
 	pub(crate) area: Area,
 
-	pub(crate) position: ratatui::widgets::Borders,
-	pub(crate) type_:    ratatui::widgets::BorderType,
-	pub(crate) style:    ratatui::style::Style,
+	pub(crate) edge:   Edge,
+	pub(crate) r#type: ratatui::widgets::BorderType,
+	pub(crate) style:  ratatui::style::Style,
 
 	pub(crate) titles: Vec<(ratatui::widgets::block::Position, ratatui::text::Line<'static>)>,
 }
 
 impl Border {
-	pub fn compose(lua: &Lua) -> mlua::Result<Table> {
-		let new = lua.create_function(|_, (_, position): (Table, u8)| {
-			Ok(Border {
-				position: ratatui::widgets::Borders::from_bits_truncate(position),
-				..Default::default()
-			})
-		})?;
+	pub fn compose(lua: &Lua) -> mlua::Result<Value> {
+		let new = lua
+			.create_function(|_, (_, edge): (Table, Edge)| Ok(Border { edge, ..Default::default() }))?;
 
 		let border = lua.create_table_from([
-			// Position
-			("NONE", Borders::NONE.bits()),
-			("TOP", Borders::TOP.bits()),
-			("RIGHT", Borders::RIGHT.bits()),
-			("BOTTOM", Borders::BOTTOM.bits()),
-			("LEFT", Borders::LEFT.bits()),
-			("ALL", Borders::ALL.bits()),
 			// Type
 			("PLAIN", PLAIN),
 			("ROUNDED", ROUNDED),
@@ -50,7 +39,7 @@ impl Border {
 		])?;
 
 		border.set_metatable(Some(lua.create_table_from([(MetaMethod::Call.name(), new)])?));
-		Ok(border)
+		border.into_lua(lua)
 	}
 
 	pub(super) fn render(
@@ -59,8 +48,8 @@ impl Border {
 		trans: impl FnOnce(yazi_config::popup::Position) -> ratatui::layout::Rect,
 	) {
 		let mut block = ratatui::widgets::Block::default()
-			.borders(self.position)
-			.border_type(self.type_)
+			.borders(self.edge.0)
+			.border_type(self.r#type)
 			.border_style(self.style);
 
 		for title in self.titles {
@@ -80,7 +69,7 @@ impl UserData for Border {
 		crate::impl_style_method!(methods, style);
 
 		methods.add_function_mut("type", |_, (ud, value): (AnyUserData, u8)| {
-			ud.borrow_mut::<Self>()?.type_ = match value {
+			ud.borrow_mut::<Self>()?.r#type = match value {
 				ROUNDED => ratatui::widgets::BorderType::Rounded,
 				DOUBLE => ratatui::widgets::BorderType::Double,
 				THICK => ratatui::widgets::BorderType::Thick,
@@ -99,12 +88,12 @@ impl UserData for Border {
 					ratatui::widgets::block::Position::Top
 				};
 
-				ud.borrow_mut::<Self>()?.titles.push((position, Line::try_from(line)?.0));
+				ud.borrow_mut::<Self>()?.titles.push((position, Line::try_from(line)?.inner));
 				Ok(ud)
 			},
 		);
-		methods.add_function_mut("position", |_, (ud, position): (AnyUserData, u8)| {
-			ud.borrow_mut::<Self>()?.position = ratatui::widgets::Borders::from_bits_truncate(position);
+		methods.add_function_mut("edge", |_, (ud, edge): (AnyUserData, Edge)| {
+			ud.borrow_mut::<Self>()?.edge = edge;
 			Ok(ud)
 		});
 	}

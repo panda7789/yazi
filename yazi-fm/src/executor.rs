@@ -1,5 +1,5 @@
-use yazi_core::input::InputMode;
 use yazi_shared::{Layer, event::CmdCow};
+use yazi_widgets::input::InputMode;
 
 use crate::app::App;
 
@@ -77,7 +77,7 @@ impl<'a> Executor<'a> {
 		on!(MGR, update_mimes, &self.app.cx.tasks);
 		on!(MGR, update_paged, &self.app.cx.tasks);
 		on!(MGR, update_yanked);
-		on!(MGR, hover);
+		on!(MGR, watch);
 		on!(MGR, peek);
 		on!(MGR, seek);
 		on!(MGR, spot);
@@ -97,6 +97,7 @@ impl<'a> Executor<'a> {
 		on!(ACTIVE, forward);
 		on!(ACTIVE, cd);
 		on!(ACTIVE, reveal);
+		on!(ACTIVE, follow);
 
 		// Toggle
 		on!(ACTIVE, toggle);
@@ -140,9 +141,7 @@ impl<'a> Executor<'a> {
 		on!(TABS, switch);
 		on!(TABS, swap);
 
-		match cmd.name.as_str() {
-			// Tasks
-			"tasks_show" => self.app.cx.tasks.toggle(()),
+		match cmd.name.as_ref() {
 			// Help
 			"help" => self.app.cx.help.toggle(Layer::Mgr),
 			// Plugin
@@ -165,14 +164,15 @@ impl<'a> Executor<'a> {
 			};
 		}
 
-		on!(toggle, "close");
+		on!(show);
+		on!(close);
 		on!(arrow);
 		on!(inspect);
 		on!(cancel);
 		on!(open_with);
 		on!(process_exec);
 
-		match cmd.name.as_str() {
+		match cmd.name.as_ref() {
 			// Help
 			"help" => self.app.cx.help.toggle(Layer::Tasks),
 			// Plugin
@@ -195,7 +195,7 @@ impl<'a> Executor<'a> {
 		on!(swipe);
 		on!(copy);
 
-		match cmd.name.as_str() {
+		match cmd.name.as_ref() {
 			// Help
 			"help" => self.app.cx.help.toggle(Layer::Spot),
 			// Plugin
@@ -217,7 +217,7 @@ impl<'a> Executor<'a> {
 		on!(close);
 		on!(arrow);
 
-		match cmd.name.as_str() {
+		match cmd.name.as_ref() {
 			// Help
 			"help" => self.app.cx.help.toggle(Layer::Pick),
 			// Plugin
@@ -233,55 +233,30 @@ impl<'a> Executor<'a> {
 					return self.app.cx.input.$name(cmd);
 				}
 			};
-			($name:ident, $alias:literal) => {
-				if cmd.name == $alias {
-					return self.app.cx.input.$name(cmd);
-				}
-			};
 		}
 
+		on!(escape);
 		on!(show);
 		on!(close);
-		on!(escape);
-		on!(move_, "move");
-		on!(backward);
-		on!(forward);
-
-		if cmd.name.as_str() == "complete" {
-			return if cmd.bool("trigger") {
-				self.app.cx.cmp.trigger(cmd)
-			} else {
-				self.app.cx.input.complete(cmd)
-			};
-		}
 
 		match self.app.cx.input.mode() {
 			InputMode::Normal => {
-				on!(insert);
-				on!(visual);
-				on!(replace);
-
-				on!(delete);
-				on!(yank);
-				on!(paste);
-
-				on!(undo);
-				on!(redo);
-
-				match cmd.name.as_str() {
+				match cmd.name.as_ref() {
 					// Help
-					"help" => self.app.cx.help.toggle(Layer::Input),
+					"help" => return self.app.cx.help.toggle(Layer::Input),
 					// Plugin
-					"plugin" => self.app.plugin(cmd),
+					"plugin" => return self.app.plugin(cmd),
 					_ => {}
 				}
 			}
-			InputMode::Insert => {
-				on!(backspace);
-				on!(kill);
-			}
+			InputMode::Insert => match cmd.name.as_ref() {
+				"complete" if cmd.bool("trigger") => return self.app.cx.cmp.trigger(cmd),
+				_ => {}
+			},
 			InputMode::Replace => {}
-		}
+		};
+
+		self.app.cx.input.execute(cmd)
 	}
 
 	fn confirm(&mut self, cmd: CmdCow) {
@@ -311,7 +286,7 @@ impl<'a> Executor<'a> {
 		on!(arrow);
 		on!(filter);
 
-		match cmd.name.as_str() {
+		match cmd.name.as_ref() {
 			"close" => self.app.cx.help.toggle(Layer::Help),
 			// Plugin
 			"plugin" => self.app.plugin(cmd),
@@ -333,8 +308,7 @@ impl<'a> Executor<'a> {
 		on!(close);
 		on!(arrow);
 
-		match cmd.name.as_str() {
-			"close_input" => self.app.cx.input.close(cmd),
+		match cmd.name.as_ref() {
 			// Help
 			"help" => self.app.cx.help.toggle(Layer::Cmp),
 			// Plugin

@@ -5,7 +5,7 @@ use image::ImageReader;
 use ratatui::layout::Rect;
 use tokio::{io::AsyncWriteExt, process::{Child, Command}, sync::mpsc::{self, UnboundedSender}};
 use tracing::{debug, warn};
-use yazi_config::PREVIEW;
+use yazi_config::YAZI;
 use yazi_shared::{LOG_LEVEL, RoCell, env_exists};
 
 use crate::{Adapter, Dimension};
@@ -53,12 +53,12 @@ impl Ueberzug {
 		})
 		.await??;
 
-		let area = Dimension::ratio()
-			.map(|(r1, r2)| Rect {
+		let area = Dimension::cell_size()
+			.map(|(cw, ch)| Rect {
 				x:      max.x,
 				y:      max.y,
-				width:  max.width.min((w.min(PREVIEW.max_width as _) as f64 / r1).ceil() as _),
-				height: max.height.min((h.min(PREVIEW.max_height as _) as f64 / r2).ceil() as _),
+				width:  max.width.min((w.min(YAZI.preview.max_width as _) as f64 / cw).ceil() as _),
+				height: max.height.min((h.min(YAZI.preview.max_height as _) as f64 / ch).ceil() as _),
 			})
 			.unwrap_or(max);
 
@@ -101,8 +101,8 @@ impl Ueberzug {
 	}
 
 	fn adjust_rect(mut rect: Rect) -> Rect {
-		let scale = PREVIEW.ueberzug_scale;
-		let (x, y, w, h) = PREVIEW.ueberzug_offset;
+		let scale = YAZI.preview.ueberzug_scale;
+		let (x, y, w, h) = YAZI.preview.ueberzug_offset;
 
 		rect.x = 0f32.max(rect.x as f32 * scale + x) as u16;
 		rect.y = 0f32.max(rect.y as f32 * scale + y) as u16;

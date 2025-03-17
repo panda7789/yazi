@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use anyhow::{Result, bail};
 use clap::{Parser, Subcommand, command};
-use yazi_shared::event::Cmd;
+use yazi_shared::{Id, event::Cmd};
 
 #[derive(Parser)]
 #[command(name = "Ya", about, long_about = None)]
@@ -22,7 +22,11 @@ pub(super) enum Command {
 	/// Emit a command to be executed by the specified instance.
 	EmitTo(CommandEmitTo),
 	/// Manage packages.
-	Pack(CommandPack),
+	#[command(subcommand)]
+	Pkg(CommandPkg),
+	#[command(hide = true)]
+	/// Manage packages.
+	Pack(CommandPack), // TODO: remove
 	/// Publish a message to the current instance.
 	Pub(CommandPub),
 	/// Publish a message to the specified instance.
@@ -33,22 +37,50 @@ pub(super) enum Command {
 
 #[derive(clap::Args)]
 pub(super) struct CommandEmit {
-	/// The name of the command.
+	/// Name of the command.
 	pub(super) name: String,
-	/// The arguments of the command.
+	/// Arguments of the command.
 	#[arg(allow_hyphen_values = true, trailing_var_arg = true)]
 	pub(super) args: Vec<String>,
 }
 
 #[derive(clap::Args)]
 pub(super) struct CommandEmitTo {
-	/// The receiver ID.
-	pub(super) receiver: u64,
-	/// The name of the command.
+	/// Receiver ID.
+	pub(super) receiver: Id,
+	/// Name of the command.
 	pub(super) name:     String,
-	/// The arguments of the command.
+	/// Arguments of the command.
 	#[arg(allow_hyphen_values = true, trailing_var_arg = true)]
 	pub(super) args:     Vec<String>,
+}
+
+#[derive(Subcommand)]
+pub(super) enum CommandPkg {
+	/// Add packages.
+	#[command(arg_required_else_help = true)]
+	Add {
+		/// Packages to add.
+		#[arg(index = 1, num_args = 1..)]
+		ids: Vec<String>,
+	},
+	/// Delete packages.
+	#[command(arg_required_else_help = true)]
+	Delete {
+		/// Packages to delete.
+		#[arg(index = 1, num_args = 1..)]
+		ids: Vec<String>,
+	},
+	/// Install all packages.
+	Install,
+	/// List all packages.
+	List,
+	/// Upgrade all packages.
+	Upgrade {
+		/// Packages to upgrade, upgrade all if unspecified.
+		#[arg(index = 1, num_args = 0..)]
+		ids: Vec<String>,
+	},
 }
 
 #[derive(clap::Args)]
@@ -69,14 +101,11 @@ pub(super) struct CommandPack {
 	/// Upgrade all packages.
 	#[arg(short = 'u', long)]
 	pub(super) upgrade: bool,
-	/// Migrate all packages.
-	#[arg(short = 'm', long)]
-	pub(super) migrate: bool, // TODO: remove this
 }
 
 #[derive(clap::Args)]
 pub(super) struct CommandPub {
-	/// The kind of message.
+	/// Kind of message.
 	#[arg(index = 1)]
 	pub(super) kind: String,
 	/// Send the message with a string body.
@@ -92,7 +121,7 @@ pub(super) struct CommandPub {
 
 impl CommandPub {
 	#[allow(dead_code)]
-	pub(super) fn receiver() -> Result<u64> {
+	pub(super) fn receiver() -> Result<Id> {
 		if let Some(s) = std::env::var("YAZI_PID").ok().filter(|s| !s.is_empty()) {
 			Ok(s.parse()?)
 		} else {
@@ -103,10 +132,10 @@ impl CommandPub {
 
 #[derive(clap::Args)]
 pub(super) struct CommandPubTo {
-	/// The receiver ID.
+	/// Receiver ID.
 	#[arg(index = 1)]
-	pub(super) receiver: u64,
-	/// The kind of message.
+	pub(super) receiver: Id,
+	/// Kind of message.
 	#[arg(index = 2)]
 	pub(super) kind:     String,
 	/// Send the message with a string body.
@@ -122,7 +151,7 @@ pub(super) struct CommandPubTo {
 
 #[derive(clap::Args)]
 pub(super) struct CommandSub {
-	/// The kind of messages to subscribe to, separated by commas if multiple.
+	/// Kind of messages to subscribe to, separated by commas if multiple.
 	#[arg(index = 1)]
 	pub(super) kinds: String,
 }
@@ -146,7 +175,7 @@ macro_rules! impl_pub_body {
 	($name:ident) => {
 		impl $name {
 			#[allow(dead_code)]
-			pub(super) fn body(&self) -> Result<Cow<str>> {
+			pub(super) fn body(&self) -> Result<Cow<'_, str>> {
 				Ok(if let Some(json) = &self.json {
 					json.into()
 				} else if let Some(str) = &self.str {

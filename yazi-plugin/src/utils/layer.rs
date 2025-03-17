@@ -9,7 +9,7 @@ use yazi_proxy::{AppProxy, ConfirmProxy, InputProxy};
 use yazi_shared::{Debounce, event::Cmd};
 
 use super::Utils;
-use crate::{bindings::InputRx, elements::{Line, Pos, Text}};
+use crate::{bindings::InputRx, deprecate, elements::{Line, Pos, Text}};
 
 impl Utils {
 	pub(super) fn which(lua: &Lua) -> mlua::Result<Function> {
@@ -20,9 +20,10 @@ impl Utils {
 			for (i, cand) in t.raw_get::<Table>("cands")?.sequence_values::<Table>().enumerate() {
 				let cand = cand?;
 				cands.push(Chord {
-					on:   Self::parse_keys(cand.raw_get("on")?)?,
-					run:  vec![Cmd::args("which:callback", &[i]).with_any("tx", tx.clone())],
-					desc: cand.raw_get("desc").ok(),
+					on:    Self::parse_keys(cand.raw_get("on")?)?,
+					run:   vec![Cmd::args("which:callback", [i]).with_any("tx", tx.clone())],
+					desc:  cand.raw_get("desc").ok(),
+					r#for: None,
 				});
 			}
 
@@ -30,7 +31,7 @@ impl Utils {
 			emit!(Call(
 				Cmd::new("which:show")
 					.with_any("candidates", cands)
-					.with_bool("silent", t.raw_get("silent").unwrap_or_default())
+					.with("silent", t.raw_get::<bool>("silent").unwrap_or_default())
 			));
 
 			Ok(rx.recv().await.map(|idx| idx + 1))
@@ -39,15 +40,26 @@ impl Utils {
 
 	pub(super) fn input(lua: &Lua) -> mlua::Result<Function> {
 		lua.create_async_function(|lua, t: Table| async move {
+			let mut pos = t.raw_get::<Value>("pos")?;
+			if pos.is_nil() {
+				pos = t.raw_get("position")?;
+				if !pos.is_nil() {
+					deprecate!(
+						lua,
+						"The `position` property of `ya.input()` is deprecated, use `pos` instead in your {}\nSee #2921 for more details: https://github.com/sxyazi/yazi/pull/2921"
+					);
+				}
+			}
+
 			let realtime = t.raw_get("realtime").unwrap_or_default();
 			let rx = UnboundedReceiverStream::new(InputProxy::show(InputCfg {
 				title: t.raw_get("title")?,
 				value: t.raw_get("value").unwrap_or_default(),
 				cursor: None, // TODO
-				position: Pos::new_input(t.raw_get::<Table>("position")?)?.into(),
+				obscure: t.raw_get("obscure").unwrap_or_default(),
+				position: Pos::new_input(pos)?.into(),
 				realtime,
 				completion: false,
-				highlight: false,
 			}));
 
 			if !realtime {
@@ -58,28 +70,26 @@ impl Utils {
 			if debounce < 0.0 {
 				Err("negative debounce duration".into_lua_err())
 			} else if debounce == 0.0 {
-				(InputRx::new(rx), Value::Nil).into_lua_multi(&lua)
+				InputRx::new(rx).into_lua_multi(&lua)
 			} else {
-				(InputRx::new(Debounce::new(rx, Duration::from_secs_f64(debounce))), Value::Nil)
-					.into_lua_multi(&lua)
+				InputRx::new(Debounce::new(rx, Duration::from_secs_f64(debounce))).into_lua_multi(&lua)
 			}
 		})
 	}
 
 	pub(super) fn confirm(lua: &Lua) -> mlua::Result<Function> {
-		fn content(t: &Table) -> mlua::Result<ratatui::widgets::Paragraph<'static>> {
-			Ok(match t.raw_get::<Value>("content") {
-				Ok(v) if v.is_nil() => Default::default(),
-				Ok(v) => Text::try_from(v)?.into(),
-				Err(e) => Err(e)?,
+		fn body(t: &Table) -> mlua::Result<ratatui::widgets::Paragraph<'static>> {
+			Ok(match t.raw_get::<Value>("body")? {
+				Value::Nil => Default::default(),
+				v => Text::try_from(v)?.into(),
 			})
 		}
 
 		lua.create_async_function(|_, t: Table| async move {
 			let result = ConfirmProxy::show(ConfirmCfg {
-				position: Pos::try_from(t.raw_get::<Table>("pos")?)?.into(),
+				position: Pos::try_from(t.raw_get::<Value>("pos")?)?.into(),
 				title:    Line::try_from(t.raw_get::<Value>("title")?)?.into(),
-				content:  content(&t)?,
+				body:     body(&t)?,
 				list:     Default::default(), // TODO
 			});
 

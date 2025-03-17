@@ -1,8 +1,10 @@
 use std::{ops::Deref, str::FromStr};
 
-use mlua::{AnyUserData, ExternalResult, Lua, MetaMethod, Table, UserData};
+use mlua::{AnyUserData, ExternalError, ExternalResult, IntoLua, Lua, MetaMethod, Table, UserData, Value};
 
 use super::Pad;
+
+const EXPECTED: &str = "expected a Pos";
 
 #[derive(Clone, Copy, Default)]
 pub struct Pos {
@@ -45,18 +47,36 @@ impl TryFrom<mlua::Table> for Pos {
 	}
 }
 
+impl TryFrom<Value> for Pos {
+	type Error = mlua::Error;
+
+	fn try_from(value: Value) -> Result<Self, Self::Error> {
+		Ok(match value {
+			Value::Table(tbl) => Self::try_from(tbl)?,
+			Value::UserData(ud) => {
+				if let Ok(pos) = ud.borrow() {
+					*pos
+				} else {
+					Err(EXPECTED.into_lua_err())?
+				}
+			}
+			_ => Err(EXPECTED.into_lua_err())?,
+		})
+	}
+}
+
 impl Pos {
-	pub fn compose(lua: &Lua) -> mlua::Result<Table> {
+	pub fn compose(lua: &Lua) -> mlua::Result<Value> {
 		let new = lua.create_function(|_, (_, t): (Table, Table)| Self::try_from(t))?;
 
 		let position = lua.create_table()?;
 		position.set_metatable(Some(lua.create_table_from([(MetaMethod::Call.name(), new)])?));
 
-		Ok(position)
+		position.into_lua(lua)
 	}
 
-	pub fn new_input(t: mlua::Table) -> mlua::Result<Self> {
-		let mut p = Self::try_from(t)?;
+	pub fn new_input(v: Value) -> mlua::Result<Self> {
+		let mut p = Self::try_from(v)?;
 		p.inner.offset.height = 3;
 		Ok(p)
 	}
@@ -64,6 +84,7 @@ impl Pos {
 
 impl UserData for Pos {
 	fn add_fields<F: mlua::UserDataFields<Self>>(fields: &mut F) {
+		// TODO: cache
 		fields.add_field_method_get(1, |_, me| Ok(me.origin.to_string()));
 		fields.add_field_method_get("x", |_, me| Ok(me.offset.x));
 		fields.add_field_method_get("y", |_, me| Ok(me.offset.y));

@@ -1,6 +1,6 @@
 use std::{borrow::Cow, iter::repeat_n};
 
-pub fn escape_str(s: &str) -> Cow<str> {
+pub fn escape_str(s: &str) -> Cow<'_, str> {
 	let bytes = s.as_bytes();
 	if !bytes.is_empty() && !bytes.iter().any(|&c| matches!(c, b' ' | b'"' | b'\n' | b'\t')) {
 		return Cow::Borrowed(s);
@@ -39,7 +39,7 @@ pub fn escape_str(s: &str) -> Cow<str> {
 }
 
 #[cfg(windows)]
-pub fn escape_os_str(s: &std::ffi::OsStr) -> Cow<std::ffi::OsStr> {
+pub fn escape_os_str(s: &std::ffi::OsStr) -> Cow<'_, std::ffi::OsStr> {
 	use std::os::windows::ffi::{OsStrExt, OsStringExt};
 
 	let wide = s.encode_wide();
@@ -93,7 +93,7 @@ fn split_slice(s: &[u16]) -> std::io::Result<Vec<String>> {
 
 	use windows_sys::{Win32::{Foundation::LocalFree, UI::Shell::CommandLineToArgvW}, core::PCWSTR};
 
-	extern "C" {
+	unsafe extern "C" {
 		fn wcslen(s: PCWSTR) -> usize;
 	}
 

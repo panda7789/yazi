@@ -5,19 +5,20 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use tokio::{io::AsyncWriteExt, select, sync::mpsc, task::JoinHandle, time};
 use tracing::error;
-use yazi_shared::RoCell;
+use yazi_macro::try_format;
+use yazi_shared::{Id, RoCell};
 
 use crate::{ClientReader, ClientWriter, Payload, Pubsub, Server, Stream, body::{Body, BodyBye, BodyHi}};
 
-pub(super) static ID: RoCell<u64> = RoCell::new();
-pub(super) static PEERS: RoCell<RwLock<HashMap<u64, Peer>>> = RoCell::new();
+pub static ID: RoCell<Id> = RoCell::new();
+pub(super) static PEERS: RoCell<RwLock<HashMap<Id, Peer>>> = RoCell::new();
 
 pub(super) static QUEUE_TX: RoCell<mpsc::UnboundedSender<String>> = RoCell::new();
 pub(super) static QUEUE_RX: RoCell<mpsc::UnboundedReceiver<String>> = RoCell::new();
 
 #[derive(Debug)]
 pub struct Client {
-	pub(super) id:        u64,
+	pub(super) id:        Id,
 	pub(super) tx:        mpsc::UnboundedSender<String>,
 	pub(super) abilities: HashSet<String>,
 }
@@ -55,7 +56,7 @@ impl Client {
 							continue;
 						} else if line.starts_with("hey,") {
 							Self::handle_hey(&line);
-						} else if let Err(e) = Payload::from_str(&line).map(|p| p.emit()) {
+						} else if let Err(e) = Payload::from_str(&line).and_then(|p| p.emit()) {
 							error!("Could not parse payload:\n{line}\n\nError:\n{e}");
 						}
 					}
@@ -65,26 +66,26 @@ impl Client {
 	}
 
 	/// Connect to an existing server to send a single message.
-	pub async fn shot(kind: &str, receiver: u64, body: &str) -> Result<()> {
+	pub async fn shot(kind: &str, receiver: Id, body: &str) -> Result<()> {
 		Body::validate(kind)?;
 
-		let payload = format!(
+		let payload = try_format!(
 			"{}\n{kind},{receiver},{ID},{body}\n{}\n",
 			Payload::new(BodyHi::borrowed(Default::default())),
 			Payload::new(BodyBye::owned())
-		);
+		)?;
 
 		let (mut lines, mut writer) = Stream::connect().await?;
 		writer.write_all(payload.as_bytes()).await?;
 		writer.flush().await?;
 		drop(writer);
 
-		let mut version = None;
+		let (mut peers, mut version) = Default::default();
 		while let Ok(Some(line)) = lines.next_line().await {
 			match line.split(',').next() {
-				Some("hey") if version.is_none() => {
+				Some("hey") => {
 					if let Ok(Body::Hey(hey)) = Payload::from_str(&line).map(|p| p.body) {
-						version = Some(hey.version);
+						(peers, version) = (hey.peers, Some(hey.version));
 					}
 				}
 				Some("bye") => break,
@@ -94,11 +95,30 @@ impl Client {
 
 		if version.as_deref() != Some(BodyHi::version()) {
 			bail!(
-				"Incompatible version (Ya {}, Yazi {}), please restart all `ya` and `yazi` processes if you upgrade either one.",
+				"Incompatible version (Ya {}, Yazi {}). Restart all `ya` and `yazi` processes if you upgrade either one.",
 				BodyHi::version(),
 				version.as_deref().unwrap_or("Unknown")
 			);
 		}
+
+		match (receiver, peers.get(&receiver).map(|p| p.able(kind))) {
+			// Send to all receivers
+			(Id(0), _) if peers.is_empty() => {
+				bail!("No receiver found. Check if any receivers are running.")
+			}
+			(Id(0), _) if peers.values().all(|p| !p.able(kind)) => {
+				bail!("No receiver has the ability to receive `{kind}` messages.")
+			}
+			(Id(0), _) => {}
+
+			// Send to a specific receiver
+			(_, Some(true)) => {}
+			(_, Some(false)) => {
+				bail!("Receiver `{receiver}` does not have the ability to receive `{kind}` messages.")
+			}
+			(_, None) => bail!("Receiver `{receiver}` not found. Check if the receiver is running."),
+		}
+
 		Ok(())
 	}
 
@@ -110,7 +130,7 @@ impl Client {
 		async fn make(kinds: &HashSet<&str>) -> Result<ClientReader> {
 			let (lines, mut writer) = Stream::connect().await?;
 			let hi = Payload::new(BodyHi::borrowed(kinds.clone()));
-			writer.write_all(format!("{hi}\n").as_bytes()).await?;
+			writer.write_all(try_format!("{hi}\n")?.as_bytes()).await?;
 			writer.flush().await?;
 			Ok(lines)
 		}
@@ -125,11 +145,10 @@ impl Client {
 					}
 				}
 				None => loop {
+					time::sleep(time::Duration::from_secs(1)).await;
 					if let Ok(new) = make(&kinds).await {
 						lines = new;
 						break;
-					} else {
-						time::sleep(time::Duration::from_secs(1)).await;
 					}
 				},
 			}
@@ -137,8 +156,8 @@ impl Client {
 	}
 
 	#[inline]
-	pub(super) fn push<'a>(payload: impl Into<Payload<'a>>) {
-		QUEUE_TX.send(format!("{}\n", payload.into())).ok();
+	pub(super) fn push<'a>(payload: impl Into<Payload<'a>>) -> Result<()> {
+		Ok(QUEUE_TX.send(try_format!("{}\n", payload.into())?)?)
 	}
 
 	#[inline]

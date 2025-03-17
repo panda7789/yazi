@@ -1,31 +1,39 @@
+use std::borrow::Cow;
+
 use anyhow::Result;
 use tracing::error;
+use yazi_macro::time;
+use yazi_term::tty::TTY;
 
 use crate::{CLOSE, ESCAPE, Emulator, START, TMUX};
 
 pub struct Mux;
 
 impl Mux {
-	pub fn csi(s: &str) -> std::borrow::Cow<str> {
+	pub fn csi(s: &str) -> Cow<'_, str> {
 		if TMUX.get() {
-			std::borrow::Cow::Owned(format!(
+			Cow::Owned(format!(
 				"{START}{}{CLOSE}",
 				s.trim_start_matches('\x1b').replace('\x1b', ESCAPE.get()),
 			))
 		} else {
-			std::borrow::Cow::Borrowed(s)
+			Cow::Borrowed(s)
 		}
 	}
 
 	pub fn tmux_passthrough() {
-		let child = std::process::Command::new("tmux")
-			.args(["set", "-p", "allow-passthrough", "on"])
-			.stdin(std::process::Stdio::null())
-			.stdout(std::process::Stdio::null())
-			.stderr(std::process::Stdio::piped())
-			.spawn();
+		let output = time!(
+			"Running `tmux set -p allow-passthrough on`",
+			std::process::Command::new("tmux")
+				.args(["set", "-p", "allow-passthrough", "on"])
+				.stdin(std::process::Stdio::null())
+				.stdout(std::process::Stdio::null())
+				.stderr(std::process::Stdio::piped())
+				.spawn()
+				.and_then(|c| c.wait_with_output())
+		);
 
-		match child.and_then(|c| c.wait_with_output()) {
+		match output {
 			Ok(o) if o.status.success() => {}
 			Ok(o) => {
 				error!(
@@ -42,7 +50,7 @@ impl Mux {
 
 	pub fn tmux_drain() -> Result<()> {
 		if TMUX.get() {
-			crossterm::execute!(std::io::stderr(), crossterm::style::Print(Mux::csi("\x1b[5n")))?;
+			crossterm::execute!(TTY.writer(), crossterm::style::Print(Mux::csi("\x1b[5n")))?;
 			_ = Emulator::read_until_dsr();
 		}
 		Ok(())
@@ -68,9 +76,14 @@ impl Mux {
 		if !TMUX.get() {
 			return (term, program);
 		}
-		let Ok(output) = std::process::Command::new("tmux").arg("show-environment").output() else {
+
+		let Ok(output) = time!(
+			"Running `tmux show-environment`",
+			std::process::Command::new("tmux").arg("show-environment").output()
+		) else {
 			return (term, program);
 		};
+
 		for line in String::from_utf8_lossy(&output.stdout).lines() {
 			if let Some((k, v)) = line.trim().split_once('=') {
 				match k {

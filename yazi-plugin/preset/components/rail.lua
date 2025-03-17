@@ -10,8 +10,8 @@ end
 
 function Rail:build()
 	self._base = {
-		ui.Bar(ui.Bar.RIGHT):area(self._chunks[1]):symbol(th.mgr.border_symbol):style(th.mgr.border_style),
-		ui.Bar(ui.Bar.LEFT):area(self._chunks[3]):symbol(th.mgr.border_symbol):style(th.mgr.border_style),
+		ui.Bar(ui.Edge.RIGHT):area(self._chunks[1]):symbol(th.mgr.border_symbol):style(th.mgr.border_style),
+		ui.Bar(ui.Edge.LEFT):area(self._chunks[3]):symbol(th.mgr.border_symbol):style(th.mgr.border_style),
 	}
 	self._children = {
 		Marker:new(self._chunks[1], self._tab.parent),
@@ -24,7 +24,7 @@ function Rail:reflow() return {} end
 function Rail:redraw()
 	local elements = self._base or {}
 	for _, child in ipairs(self._children) do
-		elements = ya.list_merge(elements, ya.redraw_with(child))
+		elements = ya.list_merge(elements, ui.redraw(child))
 	end
 	return elements
 end

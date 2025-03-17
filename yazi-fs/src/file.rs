@@ -2,16 +2,15 @@ use std::{ffi::OsStr, fs::{FileType, Metadata}, hash::{BuildHasher, Hash, Hasher
 
 use anyhow::Result;
 use tokio::fs;
-use yazi_shared::{SyncCell, theme::IconCache, url::{Url, Urn, UrnBuf}};
+use yazi_shared::url::{Url, Urn, UrnBuf};
 
-use crate::Cha;
+use crate::cha::Cha;
 
 #[derive(Clone, Debug, Default)]
 pub struct File {
 	pub url:     Url,
 	pub cha:     Cha,
 	pub link_to: Option<Url>,
-	pub icon:    SyncCell<IconCache>,
 }
 
 impl Deref for File {
@@ -23,52 +22,33 @@ impl Deref for File {
 
 impl File {
 	#[inline]
-	pub async fn from(url: Url) -> Result<Self> {
+	pub async fn new(url: Url) -> Result<Self> {
 		let meta = fs::symlink_metadata(&url).await?;
-		Ok(Self::from_meta(url, meta).await)
+		Ok(Self::from_follow(url, meta).await)
 	}
 
 	#[inline]
-	pub async fn from_meta(url: Url, meta: Metadata) -> Self {
+	pub async fn from_follow(url: Url, meta: Metadata) -> Self {
 		let link_to =
 			if meta.is_symlink() { fs::read_link(&url).await.map(Url::from).ok() } else { None };
 
-		let cha = Cha::new(&url, meta).await;
+		let cha = Cha::from_follow(&url, meta).await;
 
-		Self { url, cha, link_to, icon: Default::default() }
+		Self { url, cha, link_to }
 	}
 
 	#[inline]
 	pub fn from_dummy(url: Url, ft: Option<FileType>) -> Self {
-		Self {
-			url,
-			cha: ft.map_or_else(Cha::dummy, Cha::from),
-			link_to: None,
-			icon: Default::default(),
-		}
+		let cha = Cha::from_dummy(&url, ft);
+		Self { url, cha, link_to: None }
 	}
 
 	#[inline]
-	pub fn hash(&self) -> u64 {
-		let mut h = foldhash::fast::FixedState::default().build_hasher();
-		self.url.hash(&mut h);
-		h.write_u8(0);
-		self.cha.len.hash(&mut h);
-		h.write_u8(0);
-		self.cha.mtime.hash(&mut h);
-		h.write_u8(0);
-		self.cha.btime.hash(&mut h);
-		h.finish()
-	}
+	pub fn hash_u64(&self) -> u64 { foldhash::fast::FixedState::default().hash_one(self) }
 
 	#[inline]
 	pub fn rebase(&self, parent: &Url) -> Self {
-		Self {
-			url:     self.url.rebase(parent),
-			cha:     self.cha,
-			link_to: self.link_to.clone(),
-			icon:    Default::default(),
-		}
+		Self { url: self.url.rebase(parent), cha: self.cha, link_to: self.link_to.clone() }
 	}
 }
 
@@ -88,4 +68,13 @@ impl File {
 
 	#[inline]
 	pub fn stem(&self) -> Option<&OsStr> { self.url.file_stem() }
+}
+
+impl Hash for File {
+	fn hash<H: Hasher>(&self, state: &mut H) {
+		self.url.hash(state);
+		self.cha.len.hash(state);
+		self.cha.btime.hash(state);
+		self.cha.mtime.hash(state);
+	}
 }

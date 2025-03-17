@@ -1,10 +1,11 @@
-use std::{borrow::Cow, collections::{HashMap, HashSet}};
+use std::borrow::Cow;
 
 use anyhow::Result;
 use tokio::fs;
 use yazi_config::popup::{ConfirmCfg, InputCfg};
 use yazi_dds::Pubsub;
 use yazi_fs::{File, FilesOp, maybe_exists, ok_or_not_found, paths_to_same_file, realname};
+use yazi_macro::err;
 use yazi_proxy::{ConfirmProxy, InputProxy, TabProxy, WATCHER};
 use yazi_shared::{Id, event::CmdCow, url::{Url, UrnBuf}};
 
@@ -53,12 +54,10 @@ impl Mgr {
 
 		let old = hovered.url_owned();
 		let tab = self.tabs.active().id;
-		tokio::spawn(async move {
-			let mut result = InputProxy::show(InputCfg::rename().with_value(name).with_cursor(cursor));
-			let Some(Ok(name)) = result.recv().await else {
-				return;
-			};
+		let mut input = InputProxy::show(InputCfg::rename().with_value(name).with_cursor(cursor));
 
+		tokio::spawn(async move {
+			let Some(Ok(name)) = input.recv().await else { return };
 			if name.is_empty() {
 				return;
 			}
@@ -82,19 +81,20 @@ impl Mgr {
 
 		if let Some(o) = overwritten {
 			ok_or_not_found(fs::rename(p_new.join(&o), &new).await)?;
-			FilesOp::Deleting(p_new.clone(), HashSet::from_iter([UrnBuf::from(o)])).emit();
+			FilesOp::Deleting(p_new.clone(), [UrnBuf::from(o)].into()).emit();
 		}
-		Pubsub::pub_from_rename(tab, &old, &new);
 
-		let file = File::from(new.clone()).await?;
+		let file = File::new(new.clone()).await?;
 		if p_new == p_old {
-			FilesOp::Upserting(p_old, HashMap::from_iter([(n_old, file)])).emit();
+			FilesOp::Upserting(p_old, [(n_old, file)].into()).emit();
 		} else {
-			FilesOp::Deleting(p_old, HashSet::from_iter([n_old])).emit();
-			FilesOp::Upserting(p_new, HashMap::from_iter([(n_new, file)])).emit();
+			FilesOp::Deleting(p_old, [n_old].into()).emit();
+			FilesOp::Upserting(p_new, [(n_new, file)].into()).emit();
 		}
 
-		Ok(TabProxy::reveal(&new))
+		TabProxy::reveal(&new);
+		err!(Pubsub::pub_from_rename(tab, &old, &new));
+		Ok(())
 	}
 
 	fn empty_url_part(url: &Url, by: &str) -> String {

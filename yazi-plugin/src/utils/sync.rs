@@ -6,18 +6,18 @@ use yazi_proxy::{AppProxy, options::{PluginCallback, PluginOpt}};
 use yazi_shared::event::Data;
 
 use super::Utils;
-use crate::{RtRefMut, bindings::{MpscRx, MpscTx, MpscUnboundedRx, MpscUnboundedTx, OneshotRx, OneshotTx}, loader::LOADER, runtime::RtRef};
+use crate::{bindings::{MpscRx, MpscTx, MpscUnboundedRx, MpscUnboundedTx, OneshotRx, OneshotTx}, loader::LOADER, runtime, runtime_mut};
 
 impl Utils {
 	pub(super) fn sync(lua: &Lua, isolate: bool) -> mlua::Result<Function> {
 		if isolate {
 			lua.create_function(|lua, ()| {
-				let Some(block) = lua.named_registry_value::<RtRefMut>("ir")?.next_block() else {
+				let Some(block) = runtime_mut!(lua)?.next_block() else {
 					return Err("`ya.sync()` must be called in a plugin").into_lua_err();
 				};
 
 				lua.create_async_function(move |lua, args: MultiValue| async move {
-					let Some(cur) = lua.named_registry_value::<RtRef>("ir")?.current_owned() else {
+					let Some(cur) = runtime!(lua)?.current_owned() else {
 						return Err("block spawned by `ya.sync()` must be called in a plugin").into_lua_err();
 					};
 					Sendable::list_to_values(&lua, Self::retrieve(cur, block, args).await?)
@@ -25,7 +25,7 @@ impl Utils {
 			})
 		} else {
 			lua.create_function(|lua, f: Function| {
-				let mut rt = lua.named_registry_value::<RtRefMut>("ir")?;
+				let mut rt = runtime_mut!(lua)?;
 				if !rt.put_block(f.clone()) {
 					return Err("`ya.sync()` must be called in a plugin").into_lua_err();
 				}
@@ -40,8 +40,8 @@ impl Utils {
 	}
 
 	pub(super) fn chan(lua: &Lua) -> mlua::Result<Function> {
-		lua.create_function(|lua, (type_, buffer): (mlua::String, Option<usize>)| {
-			match (&*type_.as_bytes(), buffer) {
+		lua.create_function(|lua, (r#type, buffer): (mlua::String, Option<usize>)| {
+			match (&*r#type.as_bytes(), buffer) {
 				(b"mpsc", Some(buffer)) if buffer < 1 => {
 					Err("Buffer size must be greater than 0".into_lua_err())
 				}
@@ -82,18 +82,18 @@ impl Utils {
 		let (tx, rx) = oneshot::channel::<Vec<Data>>();
 
 		let callback: PluginCallback = {
-			let id_ = id.clone();
+			let id = id.clone();
 			Box::new(move |lua, plugin| {
-				let Some(block) = lua.named_registry_value::<RtRef>("ir")?.get_block(&id_, calls) else {
+				let Some(block) = runtime!(lua)?.get_block(&id, calls) else {
 					return Err("sync block not found".into_lua_err());
 				};
 
 				let args = [Ok(Value::Table(plugin))]
 					.into_iter()
 					.chain(args.into_iter().map(|d| Sendable::data_to_value(lua, d)))
-					.collect::<mlua::Result<_>>()?;
+					.collect::<mlua::Result<MultiValue>>()?;
 
-				let values = Sendable::values_to_list(block.call(MultiValue::from_vec(args))?)?;
+				let values = Sendable::values_to_list(block.call(args)?)?;
 				tx.send(values).map_err(|_| "send failed".into_lua_err())
 			})
 		};

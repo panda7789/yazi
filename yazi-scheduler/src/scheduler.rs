@@ -4,14 +4,14 @@ use anyhow::Result;
 use futures::{FutureExt, future::BoxFuture};
 use parking_lot::Mutex;
 use tokio::{fs, select, sync::mpsc::{self, UnboundedReceiver}, task::JoinHandle};
-use yazi_config::{TASKS, plugin::{Fetcher, Preloader}};
+use yazi_config::{YAZI, plugin::{Fetcher, Preloader}};
 use yazi_dds::Pump;
 use yazi_fs::{must_be_dir, remove_dir_clean, unique_name};
 use yazi_proxy::{MgrProxy, options::{PluginOpt, ProcessExecOpt}};
-use yazi_shared::{Throttle, url::Url};
+use yazi_shared::{Id, Throttle, url::Url};
 
 use super::{Ongoing, TaskProg, TaskStage};
-use crate::{HIGH, LOW, NORMAL, TaskKind, TaskOp, file::{File, FileOpDelete, FileOpHardlink, FileOpLink, FileOpPaste, FileOpTrash}, plugin::{Plugin, PluginOpEntry}, prework::{Prework, PreworkOpFetch, PreworkOpLoad, PreworkOpSize}, process::{Process, ProcessOpBg, ProcessOpBlock, ProcessOpOrphan}};
+use crate::{HIGH, LOW, NORMAL, TaskKind, TaskOp, file::{File, FileInDelete, FileInHardlink, FileInLink, FileInPaste, FileInTrash}, plugin::{Plugin, PluginInEntry}, prework::{Prework, PreworkInFetch, PreworkInLoad, PreworkInSize}, process::{Process, ProcessInBg, ProcessInBlock, ProcessInOrphan}};
 
 pub struct Scheduler {
 	pub file:    Arc<File>,
@@ -39,25 +39,27 @@ impl Scheduler {
 
 			micro:   micro_tx,
 			prog:    prog_tx,
-			handles: Vec::with_capacity(TASKS.micro_workers as usize + TASKS.macro_workers as usize + 1),
+			handles: Vec::with_capacity(
+				YAZI.tasks.micro_workers as usize + YAZI.tasks.macro_workers as usize + 1,
+			),
 			ongoing: Default::default(),
 		};
 
-		for _ in 0..TASKS.micro_workers {
+		for _ in 0..YAZI.tasks.micro_workers {
 			scheduler.handles.push(scheduler.schedule_micro(micro_rx.clone()));
 		}
-		for _ in 0..TASKS.macro_workers {
+		for _ in 0..YAZI.tasks.macro_workers {
 			scheduler.handles.push(scheduler.schedule_macro(micro_rx.clone(), macro_rx.clone()));
 		}
 		scheduler.progress(prog_rx);
 		scheduler
 	}
 
-	pub fn cancel(&self, id: usize) -> bool {
+	pub fn cancel(&self, id: Id) -> bool {
 		let mut ongoing = self.ongoing.lock();
 
-		if let Some(hook) = ongoing.hooks.remove(&id) {
-			self.micro.try_send(hook(true), HIGH).ok();
+		if let Some(fut) = ongoing.hooks.run_or_pop(id, true) {
+			self.micro.try_send(fut, HIGH).ok();
 			return false;
 		}
 
@@ -79,11 +81,11 @@ impl Scheduler {
 			return;
 		}
 
-		ongoing.hooks.insert(id, {
+		ongoing.hooks.add_async(id, {
 			let ongoing = self.ongoing.clone();
 			let (from, to) = (from.clone(), to.clone());
 
-			Box::new(move |canceled: bool| {
+			move |canceled: bool| {
 				async move {
 					if !canceled {
 						remove_dir_clean(&from).await;
@@ -92,7 +94,7 @@ impl Scheduler {
 					ongoing.lock().try_remove(id, TaskStage::Hooked);
 				}
 				.boxed()
-			})
+			}
 		});
 
 		let file = self.file.clone();
@@ -100,7 +102,7 @@ impl Scheduler {
 			if !force {
 				to = unique_name(to, must_be_dir(&from)).await?;
 			}
-			file.paste(FileOpPaste { id, from, to, cha: None, cut: true, follow: false, retry: 0 }).await
+			file.paste(FileInPaste { id, from, to, cha: None, cut: true, follow: false, retry: 0 }).await
 		});
 	}
 
@@ -117,7 +119,7 @@ impl Scheduler {
 			if !force {
 				to = unique_name(to, must_be_dir(&from)).await?;
 			}
-			file.paste(FileOpPaste { id, from, to, cha: None, cut: false, follow, retry: 0 }).await
+			file.paste(FileInPaste { id, from, to, cha: None, cut: false, follow, retry: 0 }).await
 		});
 	}
 
@@ -130,7 +132,7 @@ impl Scheduler {
 				to = unique_name(to, must_be_dir(&from)).await?;
 			}
 			file
-				.link(FileOpLink { id, from, to, cha: None, resolve: false, relative, delete: false })
+				.link(FileInLink { id, from, to, cha: None, resolve: false, relative, delete: false })
 				.await
 		});
 	}
@@ -148,7 +150,7 @@ impl Scheduler {
 			if !force {
 				to = unique_name(to, must_be_dir(&from)).await?;
 			}
-			file.hardlink(FileOpHardlink { id, from, to, cha: None, follow }).await
+			file.hardlink(FileInHardlink { id, from, to, cha: None, follow }).await
 		});
 	}
 
@@ -156,11 +158,11 @@ impl Scheduler {
 		let mut ongoing = self.ongoing.lock();
 		let id = ongoing.add(TaskKind::User, format!("Delete {target}"));
 
-		ongoing.hooks.insert(id, {
+		ongoing.hooks.add_async(id, {
 			let target = target.clone();
 			let ongoing = self.ongoing.clone();
 
-			Box::new(move |canceled: bool| {
+			move |canceled: bool| {
 				async move {
 					if !canceled {
 						fs::remove_dir_all(&target).await.ok();
@@ -170,14 +172,14 @@ impl Scheduler {
 					ongoing.lock().try_remove(id, TaskStage::Hooked);
 				}
 				.boxed()
-			})
+			}
 		});
 
 		let file = self.file.clone();
 		self.send_micro(
 			id,
 			LOW,
-			async move { file.delete(FileOpDelete { id, target, length: 0 }).await },
+			async move { file.delete(FileInDelete { id, target, length: 0 }).await },
 		);
 	}
 
@@ -185,11 +187,11 @@ impl Scheduler {
 		let mut ongoing = self.ongoing.lock();
 		let id = ongoing.add(TaskKind::User, format!("Trash {target}"));
 
-		ongoing.hooks.insert(id, {
+		ongoing.hooks.add_async(id, {
 			let target = target.clone();
 			let ongoing = self.ongoing.clone();
 
-			Box::new(move |canceled: bool| {
+			move |canceled: bool| {
 				async move {
 					if !canceled {
 						MgrProxy::update_tasks(&target);
@@ -198,12 +200,12 @@ impl Scheduler {
 					ongoing.lock().try_remove(id, TaskStage::Hooked);
 				}
 				.boxed()
-			})
+			}
 		});
 
 		let file = self.file.clone();
 		self.send_micro(id, LOW, async move {
-			file.trash(FileOpTrash { id, target: target.clone(), length: 0 }).await
+			file.trash(FileInTrash { id, target: target.clone(), length: 0 }).await
 		})
 	}
 
@@ -211,13 +213,13 @@ impl Scheduler {
 		let id = self.ongoing.lock().add(TaskKind::User, format!("Run micro plugin `{}`", opt.id));
 
 		let plugin = self.plugin.clone();
-		self.send_micro(id, NORMAL, async move { plugin.micro(PluginOpEntry { id, opt }).await });
+		self.send_micro(id, NORMAL, async move { plugin.micro(PluginInEntry { id, opt }).await });
 	}
 
 	pub fn plugin_macro(&self, opt: PluginOpt) {
 		let id = self.ongoing.lock().add(TaskKind::User, format!("Run macro plugin `{}`", opt.id));
 
-		self.plugin.macro_(PluginOpEntry { id, opt }).ok();
+		self.plugin.r#macro(PluginInEntry { id, opt }).ok();
 	}
 
 	pub fn fetch_paged(&self, fetcher: &'static Fetcher, targets: Vec<yazi_fs::File>) {
@@ -228,7 +230,7 @@ impl Scheduler {
 
 		let prework = self.prework.clone();
 		self.send_micro(id, NORMAL, async move {
-			prework.fetch(PreworkOpFetch { id, plugin: fetcher, targets }).await
+			prework.fetch(PreworkInFetch { id, plugin: fetcher, targets }).await
 		});
 	}
 
@@ -239,7 +241,7 @@ impl Scheduler {
 		let target = target.clone();
 		let prework = self.prework.clone();
 		self.send_micro(id, NORMAL, async move {
-			prework.load(PreworkOpLoad { id, plugin: preloader, target }).await
+			prework.load(PreworkInLoad { id, plugin: preloader, target }).await
 		});
 	}
 
@@ -254,7 +256,7 @@ impl Scheduler {
 
 			let prework = self.prework.clone();
 			self.send_micro(id, NORMAL, async move {
-				prework.size(PreworkOpSize { id, target, throttle }).await
+				prework.size(PreworkInSize { id, target, throttle }).await
 			});
 		}
 	}
@@ -273,9 +275,9 @@ impl Scheduler {
 		let mut ongoing = self.ongoing.lock();
 
 		let id = ongoing.add(TaskKind::User, name);
-		ongoing.hooks.insert(id, {
+		ongoing.hooks.add_async(id, {
 			let ongoing = self.ongoing.clone();
-			Box::new(move |canceled: bool| {
+			move |canceled: bool| {
 				async move {
 					if canceled {
 						cancel_tx.send(()).await.ok();
@@ -287,18 +289,18 @@ impl Scheduler {
 					ongoing.lock().try_remove(id, TaskStage::Hooked);
 				}
 				.boxed()
-			})
+			}
 		});
 
 		let cmd = OsString::from(&opener.run);
 		let process = self.process.clone();
 		self.send_micro(id, NORMAL, async move {
 			if opener.block {
-				process.block(ProcessOpBlock { id, cwd, cmd, args }).await
+				process.block(ProcessInBlock { id, cwd, cmd, args }).await
 			} else if opener.orphan {
-				process.orphan(ProcessOpOrphan { id, cwd, cmd, args }).await
+				process.orphan(ProcessInOrphan { id, cwd, cmd, args }).await
 			} else {
-				process.bg(ProcessOpBg { id, cwd, cmd, args, cancel: cancel_rx }).await
+				process.bg(ProcessInBg { id, cwd, cmd, args, cancel: cancel_rx }).await
 			}
 		});
 	}
@@ -319,7 +321,7 @@ impl Scheduler {
 	fn schedule_macro(
 		&self,
 		micro: async_priority_channel::Receiver<BoxFuture<'static, ()>, u8>,
-		macro_: async_priority_channel::Receiver<TaskOp, u8>,
+		r#macro: async_priority_channel::Receiver<TaskOp, u8>,
 	) -> JoinHandle<()> {
 		let file = self.file.clone();
 		let plugin = self.plugin.clone();
@@ -334,16 +336,16 @@ impl Scheduler {
 					Ok((fut, _)) = micro.recv() => {
 						fut.await;
 					}
-					Ok((op, _)) = macro_.recv() => {
-						let id = op.id();
+					Ok((r#in, _)) = r#macro.recv() => {
+						let id = r#in.id();
 						if !ongoing.lock().exists(id) {
 							continue;
 						}
 
-						let result = match op {
-							TaskOp::File(op) => file.work(*op).await,
-							TaskOp::Plugin(op) => plugin.work(*op).await,
-							TaskOp::Prework(op) => prework.work(*op).await,
+						let result = match r#in {
+							TaskOp::File(r#in) => file.work(*r#in).await,
+							TaskOp::Plugin(r#in) => plugin.work(*r#in).await,
+							TaskOp::Prework(r#in) => prework.work(*r#in).await,
 						};
 
 						if let Err(e) = result {
@@ -360,8 +362,8 @@ impl Scheduler {
 		let ongoing = self.ongoing.clone();
 
 		tokio::spawn(async move {
-			while let Some(op) = rx.recv().await {
-				match op {
+			while let Some(r#in) = rx.recv().await {
+				match r#in {
 					TaskProg::New(id, size) => {
 						if let Some(task) = ongoing.lock().get_mut(id) {
 							task.total += 1;
@@ -411,7 +413,7 @@ impl Scheduler {
 		})
 	}
 
-	fn send_micro<F>(&self, id: usize, priority: u8, f: F)
+	fn send_micro<F>(&self, id: Id, priority: u8, f: F)
 	where
 		F: Future<Output = Result<()>> + Send + 'static,
 	{
@@ -428,7 +430,7 @@ impl Scheduler {
 		);
 	}
 
-	fn new_and_fail(&self, id: usize, reason: &str) -> Result<()> {
+	fn new_and_fail(&self, id: Id, reason: &str) -> Result<()> {
 		self.prog.send(TaskProg::New(id, 0))?;
 		self.prog.send(TaskProg::Fail(id, reason.to_owned()))?;
 		Ok(())

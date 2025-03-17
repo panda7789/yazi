@@ -20,13 +20,13 @@ impl TryFrom<CmdCow> for Opt {
 
 impl Confirm {
 	pub fn show(&mut self, opt: impl TryInto<Opt>) {
-		let Ok(opt) = opt.try_into() else {
+		let Ok(opt): Result<Opt, _> = opt.try_into() else {
 			return;
 		};
 
 		self.close(false);
 		self.title = opt.cfg.title;
-		self.content = opt.cfg.content;
+		self.body = opt.cfg.body;
 		self.list = opt.cfg.list;
 
 		self.position = opt.cfg.position;

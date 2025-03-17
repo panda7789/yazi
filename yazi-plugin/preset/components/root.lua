@@ -1,6 +1,6 @@
 Root = {
 	_id = "root",
-	_drag_start = ui.Rect.default,
+	_drag_start = ui.Rect {},
 }
 
 function Root:new(area)
@@ -15,6 +15,7 @@ function Root:layout()
 		:direction(ui.Layout.VERTICAL)
 		:constraints({
 			ui.Constraint.Length(1),
+			ui.Constraint.Length(Tabs.height()),
 			ui.Constraint.Fill(1),
 			ui.Constraint.Length(1),
 		})
@@ -24,8 +25,9 @@ end
 function Root:build()
 	self._children = {
 		Header:new(self._chunks[1], cx.active),
-		Tab:new(self._chunks[2], cx.active),
-		Status:new(self._chunks[3], cx.active),
+		Tabs:new(self._chunks[2]),
+		Tab:new(self._chunks[3], cx.active),
+		Status:new(self._chunks[4], cx.active),
 		Modal:new(self._area),
 	}
 end
@@ -41,7 +43,7 @@ end
 function Root:redraw()
 	local elements = self._base or {}
 	for _, child in ipairs(self._children) do
-		elements = ya.list_merge(elements, ya.redraw_with(child))
+		elements = ya.list_merge(elements, ui.redraw(child))
 	end
 	return elements
 end

@@ -1,4 +1,5 @@
 Header = {
+	-- TODO: remove these two constants
 	LEFT = 0,
 	RIGHT = 1,
 
@@ -9,7 +10,6 @@ Header = {
 	},
 	_right = {
 		{ "count", id = 1, order = 1000 },
-		{ "tabs", id = 2, order = 2000 },
 	},
 }
 
@@ -38,7 +38,7 @@ function Header:flags()
 
 	local t = {}
 	if cwd.is_search then
-		t[#t + 1] = string.format("search: %s", cwd:frag())
+		t[#t + 1] = string.format("search: %s", cwd.frag)
 	end
 	if filter then
 		t[#t + 1] = string.format("filter: %s", filter)
@@ -74,27 +74,6 @@ function Header:count()
 	}
 end
 
-function Header:tabs()
-	local tabs = #cx.tabs
-	if tabs == 1 then
-		return ""
-	end
-
-	local spans = {}
-	for i = 1, tabs do
-		local text = i
-		if th.mgr.tab_width > 2 then
-			text = ya.truncate(text .. " " .. cx.tabs[i]:name(), { max = th.mgr.tab_width })
-		end
-		if i == cx.tabs.idx then
-			spans[#spans + 1] = ui.Span(" " .. text .. " "):style(th.mgr.tab_active)
-		else
-			spans[#spans + 1] = ui.Span(" " .. text .. " "):style(th.mgr.tab_inactive)
-		end
-	end
-	return ui.Line(spans)
-end
-
 function Header:reflow() return { self } end
 
 function Header:redraw()
@@ -104,8 +83,8 @@ function Header:redraw()
 	local left = self:children_redraw(self.LEFT)
 
 	return {
-		ui.Text(left):area(self._area),
-		ui.Text(right):area(self._area):align(ui.Text.RIGHT),
+		ui.Line(left):area(self._area),
+		ui.Line(right):area(self._area):align(ui.Align.RIGHT),
 	}
 end
 

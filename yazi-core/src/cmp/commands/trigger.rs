@@ -1,22 +1,23 @@
-use std::{borrow::Cow, mem, path::{MAIN_SEPARATOR_STR, PathBuf}};
+use std::{borrow::Cow, ffi::OsString, mem, path::{MAIN_SEPARATOR_STR, Path, PathBuf}};
 
 use tokio::fs;
 use yazi_fs::{CWD, expand_path};
 use yazi_macro::{emit, render};
-use yazi_shared::event::{Cmd, CmdCow, Data};
+use yazi_proxy::options::CmpItem;
+use yazi_shared::{Id, event::{Cmd, CmdCow, Data}, natsort};
 
 use crate::cmp::Cmp;
 
 struct Opt {
 	word:   Cow<'static, str>,
-	ticket: usize,
+	ticket: Id,
 }
 
 impl From<CmdCow> for Opt {
 	fn from(mut c: CmdCow) -> Self {
 		Self {
 			word:   c.take_first_str().unwrap_or_default(),
-			ticket: c.get("ticket").and_then(Data::as_usize).unwrap_or(0),
+			ticket: c.get("ticket").and_then(Data::as_id).unwrap_or_default(),
 		}
 	}
 }
@@ -43,17 +44,23 @@ impl Cmp {
 		tokio::spawn(async move {
 			let mut dir = fs::read_dir(&parent).await?;
 			let mut cache = vec![];
-			while let Ok(Some(f)) = dir.next_entry().await {
-				let Ok(meta) = f.metadata().await else { continue };
 
-				cache.push(format!(
-					"{}{}",
-					f.file_name().to_string_lossy(),
-					if meta.is_dir() { MAIN_SEPARATOR_STR } else { "" },
-				));
+			// "/" is both a directory separator and the root directory per se
+			// As there's no parent directory for the FS root, it is a special case
+			if parent == Path::new("/") {
+				cache.push(CmpItem { name: OsString::new(), is_dir: true });
+			}
+
+			while let Ok(Some(ent)) = dir.next_entry().await {
+				if let Ok(ft) = ent.file_type().await {
+					cache.push(CmpItem { name: ent.file_name(), is_dir: ft.is_dir() });
+				}
 			}
 
 			if !cache.is_empty() {
+				cache.sort_unstable_by(|a, b| {
+					natsort(a.name.as_encoded_bytes(), b.name.as_encoded_bytes(), false)
+				});
 				emit!(Call(
 					Cmd::new("cmp:show")
 						.with_any("cache", cache)
@@ -93,36 +100,36 @@ mod tests {
 
 	use super::*;
 
-	fn compare(s: &str, parent: &str, child: &str) -> bool {
+	fn compare(s: &str, parent: &str, child: &str) {
 		let (p, c) = Cmp::split_path(s).unwrap();
 		let p = p.strip_prefix(yazi_fs::CWD.load().as_ref()).unwrap_or(&p);
-		p == Path::new(parent) && c == child
+		assert_eq!((p, c.as_str()), (Path::new(parent), child));
 	}
 
 	#[cfg(unix)]
 	#[test]
 	fn test_split() {
 		yazi_fs::init();
-		assert!(compare("", "", ""));
-		assert!(compare(" ", "", " "));
-		assert!(compare("/", "/", ""));
-		assert!(compare("//", "//", ""));
-		assert!(compare("/foo", "/", "foo"));
-		assert!(compare("/foo/", "/foo/", ""));
-		assert!(compare("/foo/bar", "/foo/", "bar"));
+		compare("", "", "");
+		compare(" ", "", " ");
+		compare("/", "/", "");
+		compare("//", "//", "");
+		compare("/foo", "/", "foo");
+		compare("/foo/", "/foo/", "");
+		compare("/foo/bar", "/foo/", "bar");
 	}
 
 	#[cfg(windows)]
 	#[test]
 	fn test_split() {
 		yazi_fs::init();
-		assert!(compare("foo", "", "foo"));
-		assert!(compare("foo\\", "foo\\", ""));
-		assert!(compare("foo\\bar", "foo\\", "bar"));
-		assert!(compare("foo\\bar\\", "foo\\bar\\", ""));
-		assert!(compare("C:\\", "C:\\", ""));
-		assert!(compare("C:\\foo", "C:\\", "foo"));
-		assert!(compare("C:\\foo\\", "C:\\foo\\", ""));
-		assert!(compare("C:\\foo\\bar", "C:\\foo\\", "bar"));
+		compare("foo", "", "foo");
+		compare("foo\\", "foo\\", "");
+		compare("foo\\bar", "foo\\", "bar");
+		compare("foo\\bar\\", "foo\\bar\\", "");
+		compare("C:\\", "C:\\", "");
+		compare("C:\\foo", "C:\\", "foo");
+		compare("C:\\foo\\", "C:\\foo\\", "");
+		compare("C:\\foo\\bar", "C:\\foo\\", "bar");
 	}
 }

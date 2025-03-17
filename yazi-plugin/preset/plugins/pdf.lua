@@ -8,19 +8,20 @@ function M:peek(job)
 
 	local ok, err = self:preload(job)
 	if not ok or err then
-		return
+		return ya.preview_widget(job, err)
 	end
 
 	ya.sleep(math.max(0, rt.preview.image_delay / 1000 + start - os.clock()))
-	ya.image_show(cache, job.area)
-	ya.preview_widgets(job, {})
+
+	local _, err = ya.image_show(cache, job.area)
+	ya.preview_widget(job, err)
 end
 
 function M:seek(job)
 	local h = cx.active.current.hovered
 	if h and h.url == job.file.url then
 		local step = ya.clamp(-1, job.units, 1)
-		ya.mgr_emit("peek", { math.max(0, cx.active.preview.skip + step), only_if = job.file.url })
+		ya.emit("peek", { math.max(0, cx.active.preview.skip + step), only_if = job.file.url })
 	end
 end
 
@@ -32,7 +33,7 @@ function M:preload(job)
 
 	-- stylua: ignore
 	local output, err = Command("pdftoppm")
-		:args({
+		:arg({
 			"-f", job.skip + 1,
 			"-l", job.skip + 1,
 			"-singlefile",
@@ -49,7 +50,7 @@ function M:preload(job)
 	elseif not output.status.success then
 		local pages = tonumber(output.stderr:match("the last page %((%d+)%)")) or 0
 		if job.skip > 0 and pages > 0 then
-			ya.mgr_emit("peek", { math.max(0, pages - 1), only_if = job.file.url, upper_bound = true })
+			ya.emit("peek", { math.max(0, pages - 1), only_if = job.file.url, upper_bound = true })
 		end
 		return true, Err("Failed to convert PDF to image, stderr: %s", output.stderr)
 	end

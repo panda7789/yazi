@@ -8,18 +8,19 @@ function M:peek(job)
 
 	local ok, err = self:preload(job)
 	if not ok or err then
-		return
+		return ya.preview_widget(job, err)
 	end
 
 	ya.sleep(math.max(0, rt.preview.image_delay / 1000 + start - os.clock()))
-	ya.image_show(cache, job.area)
-	ya.preview_widgets(job, {})
+
+	local _, err = ya.image_show(cache, job.area)
+	ya.preview_widget(job, err)
 end
 
 function M:seek(job)
 	local h = cx.active.current.hovered
 	if h and h.url == job.file.url then
-		ya.mgr_emit("peek", {
+		ya.emit("peek", {
 			math.max(0, cx.active.preview.skip + job.units),
 			only_if = job.file.url,
 		})
@@ -27,12 +28,6 @@ function M:seek(job)
 end
 
 function M:preload(job)
-	local percent = 5 + job.skip
-	if percent > 95 then
-		ya.mgr_emit("peek", { 90, only_if = job.file.url, upper_bound = true })
-		return false
-	end
-
 	local cache = ya.file_cache(job)
 	if not cache then
 		return true
@@ -43,32 +38,50 @@ function M:preload(job)
 		return true
 	end
 
-	local meta, err = self.list_meta(job.file.url, "format=duration")
+	local meta, err = self.list_meta(job.file.url, "format=duration:stream_disposition=attached_pic")
 	if not meta then
 		return true, err
 	elseif not meta.format.duration then
 		return true, Err("Failed to get video duration")
 	end
 
-	local ss = math.floor(meta.format.duration * percent / 100)
-	local qv = 31 - math.floor(rt.preview.image_quality * 0.3)
+	local pic = M.has_pic(meta)
+	local percent = (pic and 0 or 5) + job.skip
+	if percent > 95 then
+		ya.emit("peek", { pic and 95 or 90, only_if = job.file.url, upper_bound = true })
+		return false
+	end
+
 	-- stylua: ignore
-	local status, err = Command("ffmpeg"):args({
+	local cmd = Command("ffmpeg"):arg({
 		"-v", "quiet", "-threads", 1, "-hwaccel", "auto",
-		"-skip_frame", "nokey", "-ss", ss,
+		"-skip_frame", "nokey",
 		"-an", "-sn", "-dn",
-		"-i", tostring(job.file.url),
+	})
+
+	if percent ~= 0 then
+		cmd:arg { "-ss", math.floor(meta.format.duration * percent / 100) }
+	end
+	cmd:arg { "-i", tostring(job.file.url) }
+	if percent == 0 then
+		cmd:arg { "-map", "disp:attached_pic" }
+	end
+
+	-- stylua: ignore
+	local status, err = cmd:arg({
 		"-vframes", 1,
-		"-q:v", qv,
-		"-vf", string.format("scale=-1:'min(%d,ih)':flags=fast_bilinear", rt.preview.max_height),
+		"-q:v", 31 - math.floor(rt.preview.image_quality * 0.3),
+		"-vf", string.format("scale='min(%d,iw)':'min(%d,ih)':force_original_aspect_ratio=decrease:flags=fast_bilinear", rt.preview.max_width, rt.preview.max_height),
 		"-f", "image2",
 		"-y", tostring(cache),
 	}):status()
 
-	if status then
-		return status.success
-	else
+	if not status then
 		return true, Err("Failed to start `ffmpeg`, error: %s", err)
+	elseif not status.success then
+		return false, Err("`ffmpeg` exited with error code: %s", status.code)
+	else
+		return true
 	end
 end
 
@@ -115,8 +128,12 @@ function M:spot_base(job)
 end
 
 function M.list_meta(url, entries)
-	local output, err =
-		Command("ffprobe"):args({ "-v", "quiet", "-show_entries", entries, "-of", "json=c=1", tostring(url) }):output()
+	local cmd = Command("ffprobe"):arg { "-v", "quiet" }
+	if not entries:find("attached_pic", 1, true) then
+		cmd:arg { "-select_streams", "v" }
+	end
+
+	local output, err = cmd:arg({ "-show_entries", entries, "-of", "json=c=1", tostring(url) }):output()
 	if not output then
 		return nil, Err("Failed to start `ffprobe`, error: %s", err)
 	end
@@ -131,6 +148,14 @@ function M.list_meta(url, entries)
 	t.format = t.format or {}
 	t.streams = t.streams or {}
 	return t
+end
+
+function M.has_pic(meta)
+	for _, s in ipairs(meta.streams) do
+		if s.disposition and s.disposition.attached_pic == 1 then
+			return true
+		end
+	end
 end
 
 return M
