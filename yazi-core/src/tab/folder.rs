@@ -2,12 +2,12 @@ use std::mem;
 
 use yazi_config::{LAYOUT, YAZI};
 use yazi_dds::Pubsub;
-use yazi_fs::{File, Files, FilesOp, FolderStage, Step, cha::Cha};
+use yazi_fs::{File, Files, FilesOp, FolderStage, cha::Cha};
 use yazi_macro::err;
+use yazi_parser::Step;
 use yazi_proxy::MgrProxy;
 use yazi_shared::{Id, url::{Url, Urn, UrnBuf}};
-
-use crate::Scrollable;
+use yazi_widgets::Scrollable;
 
 pub struct Folder {
 	pub url:   Url,
@@ -27,7 +27,7 @@ impl Default for Folder {
 		Self {
 			url:    Default::default(),
 			cha:    Default::default(),
-			files:  Files::new(YAZI.mgr.show_hidden),
+			files:  Files::new(YAZI.mgr.show_hidden.get()),
 			stage:  Default::default(),
 			offset: Default::default(),
 			cursor: Default::default(),
@@ -81,7 +81,7 @@ impl Folder {
 		}
 
 		self.trace = self.trace.take_if(|_| !self.files.is_empty() || self.stage.is_loading());
-		self.repos(self.trace.clone());
+		self.repos(None);
 
 		(stage, revision) != (self.stage, self.files.revision)
 	}
@@ -91,7 +91,7 @@ impl Folder {
 		if !self.update(op) {
 			return false;
 		} else if self.stage != old {
-			err!(Pubsub::pub_from_load(tab, &self.url, self.stage));
+			err!(Pubsub::pub_after_load(tab, &self.url, self.stage));
 		}
 		true
 	}
@@ -100,7 +100,7 @@ impl Folder {
 		let mut b = if self.files.is_empty() {
 			(mem::take(&mut self.cursor), mem::take(&mut self.offset)) != (0, 0)
 		} else {
-			self.scroll(step.into())
+			self.scroll(step)
 		};
 
 		self.trace = self.hovered().filter(|_| b).map(|h| h.urn_owned()).or(self.trace.take());
@@ -120,8 +120,14 @@ impl Folder {
 	}
 
 	#[inline]
-	pub fn repos(&mut self, urn: Option<impl AsRef<Urn>>) -> bool {
-		if let Some(u) = urn { self.hover(u.as_ref()) } else { self.arrow(0) }
+	pub fn repos(&mut self, urn: Option<&Urn>) -> bool {
+		if let Some(u) = urn {
+			self.hover(u)
+		} else if let Some(u) = &self.trace {
+			self.hover(u.clone().as_ref())
+		} else {
+			self.arrow(0)
+		}
 	}
 
 	pub fn sync_page(&mut self, force: bool) {
@@ -141,7 +147,7 @@ impl Folder {
 		let len = self.files.len();
 
 		let limit = LAYOUT.get().limit();
-		let scrolloff = (limit / 2).min(YAZI.mgr.scrolloff as usize);
+		let scrolloff = (limit / 2).min(YAZI.mgr.scrolloff.get() as usize);
 
 		self.offset = if self.cursor < (self.offset + limit).min(len).saturating_sub(scrolloff) {
 			len.saturating_sub(limit).min(self.offset)
@@ -157,6 +163,9 @@ impl Folder {
 	#[inline]
 	pub fn hovered(&self) -> Option<&File> { self.files.get(self.cursor) }
 
+	#[inline]
+	pub fn hovered_mut(&mut self) -> Option<&mut File> { self.files.get_mut(self.cursor) }
+
 	pub fn paginate(&self, page: usize) -> &[File] {
 		let len = self.files.len();
 		let limit = LAYOUT.get().limit();
@@ -169,13 +178,13 @@ impl Folder {
 
 impl Scrollable for Folder {
 	#[inline]
-	fn len(&self) -> usize { self.files.len() }
+	fn total(&self) -> usize { self.files.len() }
 
 	#[inline]
 	fn limit(&self) -> usize { LAYOUT.get().limit() }
 
 	#[inline]
-	fn scrolloff(&self) -> usize { (self.limit() / 2).min(YAZI.mgr.scrolloff as usize) }
+	fn scrolloff(&self) -> usize { (self.limit() / 2).min(YAZI.mgr.scrolloff.get() as usize) }
 
 	#[inline]
 	fn cursor_mut(&mut self) -> &mut usize { &mut self.cursor }

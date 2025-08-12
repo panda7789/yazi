@@ -1,7 +1,9 @@
 use std::{borrow::Cow, ops::Deref};
 
+use anyhow::Result;
+
 use super::{Cmd, Data, DataKey};
-use crate::url::Url;
+use crate::{SStr, url::Url};
 
 #[derive(Debug)]
 pub enum CmdCow {
@@ -38,7 +40,7 @@ impl CmdCow {
 	}
 
 	#[inline]
-	pub fn take_str(&mut self, name: impl Into<DataKey>) -> Option<Cow<'static, str>> {
+	pub fn take_str(&mut self, name: impl Into<DataKey>) -> Option<SStr> {
 		match self {
 			Self::Owned(c) => c.take_str(name),
 			Self::Borrowed(c) => c.str(name).map(Cow::Borrowed),
@@ -54,7 +56,7 @@ impl CmdCow {
 	}
 
 	#[inline]
-	pub fn take_first_str(&mut self) -> Option<Cow<'static, str>> {
+	pub fn take_first_str(&mut self) -> Option<SStr> {
 		match self {
 			Self::Owned(c) => c.take_first_str(),
 			Self::Borrowed(c) => c.first_str().map(Cow::Borrowed),
@@ -72,6 +74,14 @@ impl CmdCow {
 	pub fn take_any<T: 'static>(&mut self, name: impl Into<DataKey>) -> Option<T> {
 		match self {
 			Self::Owned(c) => c.take_any(name),
+			Self::Borrowed(_) => None,
+		}
+	}
+
+	#[inline]
+	pub fn take_any2<T: 'static>(&mut self, name: impl Into<DataKey>) -> Option<Result<T>> {
+		match self {
+			Self::Owned(c) => c.take_any2(name),
 			Self::Borrowed(_) => None,
 		}
 	}

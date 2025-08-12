@@ -23,15 +23,16 @@ default      = [ "vendored-lua" ]
 vendored-lua = [ "mlua/vendored" ]
 
 [dependencies]
+yazi-actor   = { path = "../yazi-actor", version = "25.6.11" }
 yazi-adapter = { path = "../yazi-adapter", version = "25.6.11" }
 yazi-binding = { path = "../yazi-binding", version = "25.6.11" }
 yazi-boot    = { path = "../yazi-boot", version = "25.6.11" }
-yazi-codegen = { path = "../yazi-codegen", version = "25.6.11" }
 yazi-config  = { path = "../yazi-config", version = "25.6.11" }
 yazi-core    = { path = "../yazi-core", version = "25.6.11" }
 yazi-dds     = { path = "../yazi-dds", version = "25.6.11" }
 yazi-fs      = { path = "../yazi-fs", version = "25.6.11" }
 yazi-macro   = { path = "../yazi-macro", version = "25.6.11" }
+yazi-parser  = { path = "../yazi-parser", version = "25.6.11" }
 yazi-plugin  = { path = "../yazi-plugin", version = "25.6.11" }
 yazi-proxy   = { path = "../yazi-proxy", version = "25.6.11" }
 yazi-shared  = { path = "../yazi-shared", version = "25.6.11" }
@@ -43,9 +44,7 @@ anyhow       = { workspace = true }
 better-panic = "0.3.0"
 crossterm    = { workspace = true }
 fdlimit      = "0.3.0"
-foldhash     = { workspace = true }
 futures      = { workspace = true }
-indexmap     = { workspace = true }
 mlua         = { workspace = true }
 paste        = { workspace = true }
 ratatui      = { workspace = true }
@@ -59,6 +58,9 @@ tracing            = { workspace = true }
 tracing-appender   = "0.2.3"
 tracing-subscriber = { version = "0.3.19", features = [ "env-filter" ] }
 
+[target.aarch64-apple-darwin]
+rustflags = [ "-Ctarget-cpu=apple-m1" ]
+
 [target."cfg(unix)".dependencies]
 libc              = { workspace = true }
 signal-hook-tokio = { version = "0.3.1", features = [ "futures-v0_3" ] }
@@ -68,6 +70,11 @@ crossterm = { workspace = true, features = [ "use-dev-tty", "libc" ] }
 
 [target.'cfg(all(not(target_os = "macos"), not(target_os = "windows")))'.dependencies]
 tikv-jemallocator = "0.6.0"
+
+[env]
+MACOSX_DEPLOYMENT_TARGET      = "10.11"
+JEMALLOC_SYS_WITH_LG_PAGE     = "16"
+JEMALLOC_SYS_WITH_MALLOC_CONF = "narenas:1"
 
 [[bin]]
 name = "yazi"

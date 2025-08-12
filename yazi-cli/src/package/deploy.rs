@@ -1,11 +1,11 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use tokio::fs;
-use yazi_fs::{copy_and_seal, maybe_exists, remove_dir_clean};
+use yazi_fs::{provider::local::Local, remove_dir_clean};
 use yazi_macro::outln;
 
 use super::Dependency;
+use crate::shared::{copy_and_seal, maybe_exists};
 
 impl Dependency {
 	pub(super) async fn deploy(&mut self) -> Result<()> {
@@ -20,7 +20,7 @@ impl Dependency {
 			self.hash_check().await?;
 		}
 
-		fs::create_dir_all(&to).await?;
+		Local::create_dir_all(&to).await?;
 		self.delete_assets().await?;
 
 		let res1 = Self::deploy_assets(from.join("assets"), to.join("assets")).await;
@@ -30,7 +30,7 @@ impl Dependency {
 			self.delete_sources().await?;
 		}
 
-		remove_dir_clean(&to).await;
+		remove_dir_clean(&to.into()).await;
 		self.hash = self.hash().await?;
 		res2?;
 		res1?;
@@ -40,9 +40,9 @@ impl Dependency {
 	}
 
 	async fn deploy_assets(from: PathBuf, to: PathBuf) -> Result<()> {
-		match fs::read_dir(&from).await {
+		match Local::read_dir(&from).await {
 			Ok(mut it) => {
-				fs::create_dir_all(&to).await?;
+				Local::create_dir_all(&to).await?;
 				while let Some(entry) = it.next_entry().await? {
 					let (src, dist) = (entry.path(), to.join(entry.file_name()));
 					copy_and_seal(&src, &dist).await.with_context(|| {

@@ -3,11 +3,12 @@ use std::{ffi::OsString, future::Future, sync::Arc, time::Duration};
 use anyhow::Result;
 use futures::{FutureExt, future::BoxFuture};
 use parking_lot::Mutex;
-use tokio::{fs, select, sync::mpsc::{self, UnboundedReceiver}, task::JoinHandle};
+use tokio::{select, sync::mpsc::{self, UnboundedReceiver}, task::JoinHandle};
 use yazi_config::{YAZI, plugin::{Fetcher, Preloader}};
 use yazi_dds::Pump;
-use yazi_fs::{must_be_dir, remove_dir_clean, unique_name};
-use yazi_proxy::{MgrProxy, options::{PluginOpt, ProcessExecOpt}};
+use yazi_fs::{must_be_dir, path::unique_name, provider, remove_dir_clean};
+use yazi_parser::{app::PluginOpt, tasks::ProcessExecOpt};
+use yazi_proxy::MgrProxy;
 use yazi_shared::{Id, Throttle, url::Url};
 
 use super::{Ongoing, TaskProg, TaskStage};
@@ -74,7 +75,7 @@ impl Scheduler {
 
 	pub fn file_cut(&self, from: Url, mut to: Url, force: bool) {
 		let mut ongoing = self.ongoing.lock();
-		let id = ongoing.add(TaskKind::User, format!("Cut {from} to {to}"));
+		let id = ongoing.add(TaskKind::User, format!("Cut {} to {}", from.display(), to.display()));
 
 		if to.starts_with(&from) && to != from {
 			self.new_and_fail(id, "Cannot cut directory into itself").ok();
@@ -107,7 +108,10 @@ impl Scheduler {
 	}
 
 	pub fn file_copy(&self, from: Url, mut to: Url, force: bool, follow: bool) {
-		let id = self.ongoing.lock().add(TaskKind::User, format!("Copy {from} to {to}"));
+		let id = self
+			.ongoing
+			.lock()
+			.add(TaskKind::User, format!("Copy {} to {}", from.display(), to.display()));
 
 		if to.starts_with(&from) && to != from {
 			self.new_and_fail(id, "Cannot copy directory into itself").ok();
@@ -124,7 +128,10 @@ impl Scheduler {
 	}
 
 	pub fn file_link(&self, from: Url, mut to: Url, relative: bool, force: bool) {
-		let id = self.ongoing.lock().add(TaskKind::User, format!("Link {from} to {to}"));
+		let id = self
+			.ongoing
+			.lock()
+			.add(TaskKind::User, format!("Link {} to {}", from.display(), to.display()));
 
 		let file = self.file.clone();
 		self.send_micro(id, LOW, async move {
@@ -138,7 +145,10 @@ impl Scheduler {
 	}
 
 	pub fn file_hardlink(&self, from: Url, mut to: Url, force: bool, follow: bool) {
-		let id = self.ongoing.lock().add(TaskKind::User, format!("Hardlink {from} to {to}"));
+		let id = self
+			.ongoing
+			.lock()
+			.add(TaskKind::User, format!("Hardlink {} to {}", from.display(), to.display()));
 
 		if to.starts_with(&from) && to != from {
 			self.new_and_fail(id, "Cannot hardlink directory into itself").ok();
@@ -156,7 +166,7 @@ impl Scheduler {
 
 	pub fn file_delete(&self, target: Url) {
 		let mut ongoing = self.ongoing.lock();
-		let id = ongoing.add(TaskKind::User, format!("Delete {target}"));
+		let id = ongoing.add(TaskKind::User, format!("Delete {}", target.display()));
 
 		ongoing.hooks.add_async(id, {
 			let target = target.clone();
@@ -165,7 +175,7 @@ impl Scheduler {
 			move |canceled: bool| {
 				async move {
 					if !canceled {
-						fs::remove_dir_all(&target).await.ok();
+						provider::remove_dir_all(&target).await.ok();
 						MgrProxy::update_tasks(&target);
 						Pump::push_delete(target);
 					}
@@ -185,7 +195,7 @@ impl Scheduler {
 
 	pub fn file_trash(&self, target: Url) {
 		let mut ongoing = self.ongoing.lock();
-		let id = ongoing.add(TaskKind::User, format!("Trash {target}"));
+		let id = ongoing.add(TaskKind::User, format!("Trash {}", target.display()));
 
 		ongoing.hooks.add_async(id, {
 			let target = target.clone();
@@ -250,7 +260,8 @@ impl Scheduler {
 		let mut ongoing = self.ongoing.lock();
 
 		for target in targets {
-			let id = ongoing.add(TaskKind::Preload, format!("Calculate the size of {target}"));
+			let id =
+				ongoing.add(TaskKind::Preload, format!("Calculate the size of {}", target.display()));
 			let target = target.clone();
 			let throttle = throttle.clone();
 
@@ -376,10 +387,10 @@ impl Scheduler {
 							task.succ += succ;
 							task.processed += processed;
 						}
-						if succ > 0 {
-							if let Some(fut) = ongoing.try_remove(id, TaskStage::Pending) {
-								micro.try_send(fut, LOW).ok();
-							}
+						if succ > 0
+							&& let Some(fut) = ongoing.try_remove(id, TaskStage::Pending)
+						{
+							micro.try_send(fut, LOW).ok();
 						}
 					}
 					TaskProg::Succ(id) => {

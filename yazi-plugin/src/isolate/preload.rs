@@ -1,13 +1,13 @@
 use mlua::{ExternalError, ExternalResult, HookTriggers, IntoLua, ObjectLike, VmState};
 use tokio::{runtime::Handle, select};
 use tokio_util::sync::CancellationToken;
-use yazi_binding::Error;
+use yazi_binding::{Error, File, elements::Rect};
 use yazi_config::LAYOUT;
 use yazi_dds::Sendable;
 use yazi_shared::event::Cmd;
 
 use super::slim_lua;
-use crate::{elements::Rect, file::File, loader::LOADER};
+use crate::loader::LOADER;
 
 pub async fn preload(
 	cmd: &'static Cmd,
@@ -29,7 +29,7 @@ pub async fn preload(
 						Ok(VmState::Continue)
 					}
 				},
-			);
+			)?;
 
 			let plugin = LOADER.load_once(&lua, &cmd.name)?;
 			let job = lua.create_table_from([

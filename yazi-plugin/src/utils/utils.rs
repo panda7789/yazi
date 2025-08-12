@@ -1,11 +1,12 @@
 use mlua::{IntoLua, Lua, Value};
-
-use crate::Composer;
+use yazi_binding::{Composer, ComposerSet};
 
 pub(super) struct Utils;
 
-pub fn compose(lua: &Lua, isolate: bool) -> mlua::Result<Value> {
-	Composer::make(lua, move |lua, key| {
+pub fn compose(
+	isolate: bool,
+) -> Composer<impl Fn(&Lua, &[u8]) -> mlua::Result<Value>, ComposerSet> {
+	fn get(lua: &Lua, key: &[u8], isolate: bool) -> mlua::Result<Value> {
 		match key {
 			// App
 			b"id" => Utils::id(lua)?,
@@ -85,5 +86,9 @@ pub fn compose(lua: &Lua, isolate: bool) -> mlua::Result<Value> {
 			_ => return Ok(Value::Nil),
 		}
 		.into_lua(lua)
-	})
+	}
+
+	fn set(_: &Lua, _: &[u8], value: Value) -> mlua::Result<Value> { Ok(value) }
+
+	Composer::new(move |lua, key| get(lua, key, isolate), set)
 }

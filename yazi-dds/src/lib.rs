@@ -1,6 +1,8 @@
 #![allow(clippy::option_map_unit_fn)]
 
-yazi_macro::mod_pub!(body);
+mod macros;
+
+yazi_macro::mod_pub!(ember spark);
 
 yazi_macro::mod_flat!(client payload pubsub pump sendable server state stream);
 

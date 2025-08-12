@@ -1,34 +1,27 @@
 use std::{any::Any, borrow::Cow, collections::HashMap, fmt::{self, Display}, mem, str::FromStr};
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use serde::{Deserialize, de};
 
 use super::{Data, DataKey};
-use crate::{Layer, url::Url};
+use crate::{Id, Layer, SStr, Source, url::Url};
 
 #[derive(Debug, Default)]
 pub struct Cmd {
-	pub name:  Cow<'static, str>,
-	pub args:  HashMap<DataKey, Data>,
-	pub layer: Layer,
+	pub name:   SStr,
+	pub args:   HashMap<DataKey, Data>,
+	pub layer:  Layer,
+	pub source: Source,
 }
 
 impl Cmd {
-	pub fn new<N>(name: N) -> Self
+	pub fn new<N>(name: N, source: Source, default: Option<Layer>) -> Result<Self>
 	where
-		N: Into<Cow<'static, str>>,
+		N: Into<SStr>,
 	{
-		Self::new_or(name, Default::default())
-			.unwrap_or_else(|_| Self { name: "null".into(), ..Default::default() })
-	}
-
-	pub fn new_or<N>(name: N, default: Layer) -> Result<Self>
-	where
-		N: Into<Cow<'static, str>>,
-	{
-		let cow: Cow<'static, str> = name.into();
+		let cow: SStr = name.into();
 		let (layer, name) = match cow.find(':') {
-			None => (default, cow),
+			None => (default.ok_or_else(|| anyhow!("Cannot infer layer from command name: {cow}"))?, cow),
 			Some(i) => (cow[..i].parse()?, match cow {
 				Cow::Borrowed(s) => Cow::Borrowed(&s[i + 1..]),
 				Cow::Owned(mut s) => {
@@ -38,20 +31,30 @@ impl Cmd {
 			}),
 		};
 
-		Ok(Self { name, args: Default::default(), layer })
+		Ok(Self { name, args: Default::default(), layer, source })
 	}
 
-	pub fn args<N, D, I>(name: N, args: I) -> Self
+	pub fn new_relay<N>(name: N) -> Self
 	where
-		N: Into<Cow<'static, str>>,
+		N: Into<SStr>,
+	{
+		Self::new(name, Source::Relay, None).unwrap_or(Self::null())
+	}
+
+	pub fn new_relay_args<N, D, I>(name: N, args: I) -> Self
+	where
+		N: Into<SStr>,
 		D: Into<Data>,
 		I: IntoIterator<Item = D>,
 	{
-		let mut me = Self::new(name);
-		me.args =
+		let mut cmd = Self::new(name, Source::Relay, None).unwrap_or(Self::null());
+		cmd.args =
 			args.into_iter().enumerate().map(|(i, a)| (DataKey::Integer(i as i64), a.into())).collect();
-		me
+		cmd
 	}
+
+	#[inline]
+	fn null() -> Self { Self { name: Cow::Borrowed("null"), ..Default::default() } }
 
 	#[inline]
 	pub fn len(&self) -> usize { self.args.len() }
@@ -85,17 +88,16 @@ impl Cmd {
 	pub fn get(&self, name: impl Into<DataKey>) -> Option<&Data> { self.args.get(&name.into()) }
 
 	#[inline]
-	pub fn str(&self, name: impl Into<DataKey>) -> Option<&str> {
-		self.get(name).and_then(Data::as_str)
-	}
+	pub fn str(&self, name: impl Into<DataKey>) -> Option<&str> { self.get(name)?.as_str() }
 
 	#[inline]
 	pub fn bool(&self, name: impl Into<DataKey>) -> bool { self.maybe_bool(name).unwrap_or(false) }
 
 	#[inline]
-	pub fn maybe_bool(&self, name: impl Into<DataKey>) -> Option<bool> {
-		self.get(name).and_then(Data::as_bool)
-	}
+	pub fn maybe_bool(&self, name: impl Into<DataKey>) -> Option<bool> { self.get(name)?.as_bool() }
+
+	#[inline]
+	pub fn id(&self, name: impl Into<DataKey>) -> Option<Id> { self.get(name)?.as_id() }
 
 	#[inline]
 	pub fn first(&self) -> Option<&Data> { self.get(0) }
@@ -116,7 +118,7 @@ impl Cmd {
 	}
 
 	#[inline]
-	pub fn take_str(&mut self, name: impl Into<DataKey>) -> Option<Cow<'static, str>> {
+	pub fn take_str(&mut self, name: impl Into<DataKey>) -> Option<SStr> {
 		if let Some(Data::String(s)) = self.take(name) { Some(s) } else { None }
 	}
 
@@ -124,7 +126,7 @@ impl Cmd {
 	pub fn take_first(&mut self) -> Option<Data> { self.take(0) }
 
 	#[inline]
-	pub fn take_first_str(&mut self) -> Option<Cow<'static, str>> {
+	pub fn take_first_str(&mut self) -> Option<SStr> {
 		if let Some(Data::String(s)) = self.take_first() { Some(s) } else { None }
 	}
 
@@ -133,7 +135,12 @@ impl Cmd {
 
 	#[inline]
 	pub fn take_any<T: 'static>(&mut self, name: impl Into<DataKey>) -> Option<T> {
-		self.args.remove(&name.into()).and_then(|d| d.into_any())
+		self.args.remove(&name.into())?.into_any()
+	}
+
+	#[inline]
+	pub fn take_any2<T: 'static>(&mut self, name: impl Into<DataKey>) -> Option<Result<T>> {
+		self.args.remove(&name.into()).map(Data::into_any2)
 	}
 
 	// Parse
@@ -203,7 +210,7 @@ impl FromStr for Cmd {
 			bail!("command name cannot be empty");
 		}
 
-		let mut me = Self::new(mem::take(&mut words[0]));
+		let mut me = Self::new(mem::take(&mut words[0]), Default::default(), Some(Default::default()))?;
 		me.args = Cmd::parse_args(words.into_iter().skip(1), last, true)?;
 		Ok(me)
 	}

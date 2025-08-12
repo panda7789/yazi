@@ -1,9 +1,9 @@
-use std::{ops::Deref, path::Path};
+use std::{borrow::Cow, ops::Deref};
 
 use mlua::{AnyUserData, ExternalError, FromLua, Lua, MetaMethod, UserData, UserDataFields, UserDataMethods, UserDataRef, Value};
-use yazi_shared::IntoOsStr;
+use yazi_shared::url::CovUrl;
 
-use crate::{Urn, cached_field};
+use crate::{Urn, cached_field, deprecate};
 
 pub type UrlRef = UserDataRef<Url>;
 
@@ -16,7 +16,7 @@ pub struct Url {
 	v_urn:    Option<Value>,
 	v_base:   Option<Value>,
 	v_parent: Option<Value>,
-	v_frag:   Option<Value>,
+	v_domain: Option<Value>,
 }
 
 impl Deref for Url {
@@ -25,12 +25,24 @@ impl Deref for Url {
 	fn deref(&self) -> &Self::Target { &self.inner }
 }
 
-impl AsRef<Path> for Url {
-	fn as_ref(&self) -> &Path { self.inner.as_path() }
+impl AsRef<yazi_shared::url::Url> for Url {
+	fn as_ref(&self) -> &yazi_shared::url::Url { &self.inner }
 }
 
 impl From<Url> for yazi_shared::url::Url {
 	fn from(value: Url) -> Self { value.inner }
+}
+
+impl From<Url> for Cow<'_, yazi_shared::url::Url> {
+	fn from(value: Url) -> Self { Cow::Owned(value.inner) }
+}
+
+impl<'a> From<&'a Url> for Cow<'a, yazi_shared::url::Url> {
+	fn from(value: &'a Url) -> Self { Cow::Borrowed(&value.inner) }
+}
+
+impl From<Url> for yazi_shared::url::CovUrl {
+	fn from(value: Url) -> Self { CovUrl(value.inner) }
 }
 
 impl TryFrom<&[u8]> for Url {
@@ -52,7 +64,7 @@ impl Url {
 			v_urn:    None,
 			v_base:   None,
 			v_parent: None,
-			v_frag:   None,
+			v_domain: None,
 		}
 	}
 
@@ -82,10 +94,7 @@ impl FromLua for Url {
 impl UserData for Url {
 	fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
 		cached_field!(fields, name, |lua, me| {
-			Some(me.name())
-				.filter(|&s| !s.is_empty())
-				.map(|s| lua.create_string(s.as_encoded_bytes()))
-				.transpose()
+			me.file_name().map(|s| lua.create_string(s.as_encoded_bytes())).transpose()
 		});
 		cached_field!(fields, stem, |lua, me| {
 			me.file_stem().map(|s| lua.create_string(s.as_encoded_bytes())).transpose()
@@ -98,7 +107,14 @@ impl UserData for Url {
 		cached_field!(fields, base, |_, me| {
 			Ok(if me.base().as_os_str().is_empty() { None } else { Some(Self::new(me.base())) })
 		});
-		cached_field!(fields, frag, |lua, me| lua.create_string(me.frag().as_encoded_bytes()));
+		cached_field!(fields, domain, |lua, me| {
+			me.scheme.domain().map(|s| lua.create_string(s)).transpose()
+		});
+
+		fields.add_field_method_get("frag", |lua, me| {
+			deprecate!(lua, "`frag` property of Url is deprecated and renamed to `domain`, please use the new name instead, in your {}");
+			me.scheme.domain().map(|s| lua.create_string(s)).transpose()
+		});
 
 		fields.add_field_method_get("is_regular", |_, me| Ok(me.is_regular()));
 		fields.add_field_method_get("is_search", |_, me| Ok(me.is_search()));
@@ -130,24 +146,24 @@ impl UserData for Url {
 			})
 		});
 		methods.add_method("strip_prefix", |_, me, base: Value| {
-			let path = match base {
-				Value::String(s) => me.strip_prefix(s.to_str()?.as_ref()),
+			let urn = match base {
+				Value::String(s) => me.strip_prefix(Self::try_from(s.as_bytes().as_ref())?),
 				Value::UserData(ud) => me.strip_prefix(&ud.borrow::<Self>()?.inner),
 				_ => Err("must be a string or a Url".into_lua_err())?,
 			};
-			Ok(path.ok().map(Self::new))
+			Ok(urn.map(Deref::deref).map(Self::new)) // TODO: return `Urn` instead of `Url`
 		});
 
-		methods.add_function_mut("into_search", |_, (ud, frag): (AnyUserData, mlua::String)| {
-			Ok(Self::new(ud.take::<Self>()?.inner.into_search(frag.as_bytes().into_os_str()?)))
+		methods.add_function_mut("into_search", |_, (ud, domain): (AnyUserData, mlua::String)| {
+			Ok(Self::new(ud.take::<Self>()?.inner.into_search(domain.to_str()?)))
 		});
 
 		methods.add_meta_method(MetaMethod::Eq, |_, me, other: UrlRef| Ok(me.inner == other.inner));
 		methods.add_meta_method(MetaMethod::ToString, |lua, me, ()| {
-			lua.create_string(me.as_os_str().as_encoded_bytes())
+			lua.create_string(me.os_str().as_encoded_bytes())
 		});
 		methods.add_meta_method(MetaMethod::Concat, |lua, lhs, rhs: mlua::String| {
-			lua.create_string([lhs.as_os_str().as_encoded_bytes(), &rhs.as_bytes()].concat())
+			lua.create_string([lhs.os_str().as_encoded_bytes(), &rhs.as_bytes()].concat())
 		});
 	}
 }

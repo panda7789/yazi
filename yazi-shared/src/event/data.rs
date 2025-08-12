@@ -1,9 +1,10 @@
 use std::{any::Any, borrow::Cow, collections::HashMap};
 
+use anyhow::{Result, bail};
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize, de};
 
-use crate::{Id, url::{Url, UrnBuf}};
+use crate::{Id, SStr, url::{Url, UrnBuf}};
 
 // --- Data
 #[derive(Debug, Serialize, Deserialize)]
@@ -13,7 +14,7 @@ pub enum Data {
 	Boolean(bool),
 	Integer(i64),
 	Number(f64),
-	String(Cow<'static, str>),
+	String(SStr),
 	List(Vec<Data>),
 	Dict(HashMap<DataKey, Data>),
 	Id(Id),
@@ -47,7 +48,7 @@ impl Data {
 	}
 
 	#[inline]
-	pub fn into_string(self) -> Option<Cow<'static, str>> {
+	pub fn into_string(self) -> Option<SStr> {
 		match self {
 			Self::String(s) => Some(s),
 			_ => None,
@@ -65,9 +66,9 @@ impl Data {
 	#[inline]
 	pub fn into_url(self) -> Option<Url> {
 		match self {
-			Self::String(s) => Url::try_from(s.as_ref()).ok(),
+			Self::String(s) => s.parse().ok(),
 			Self::Url(u) => Some(u),
-			Self::Bytes(b) => Url::try_from(b.as_slice()).ok(),
+			Self::Bytes(b) => b.as_slice().try_into().ok(),
 			_ => None,
 		}
 	}
@@ -80,15 +81,31 @@ impl Data {
 		}
 	}
 
+	// FIXME: find a better name
+	#[inline]
+	pub fn into_any2<T: 'static>(self) -> Result<T> {
+		if let Self::Any(b) = self
+			&& let Ok(t) = b.downcast::<T>()
+		{
+			Ok(*t)
+		} else {
+			bail!("Failed to downcast Data into {}", std::any::type_name::<T>())
+		}
+	}
+
 	#[inline]
 	pub fn to_url(&self) -> Option<Url> {
 		match self {
-			Self::String(s) => Url::try_from(s.as_ref()).ok(),
+			Self::String(s) => s.parse().ok(),
 			Self::Url(u) => Some(u.clone()),
-			Self::Bytes(b) => Url::try_from(b.as_slice()).ok(),
+			Self::Bytes(b) => b.as_slice().try_into().ok(),
 			_ => None,
 		}
 	}
+}
+
+impl From<()> for Data {
+	fn from(_: ()) -> Self { Self::Nil }
 }
 
 impl From<bool> for Data {
@@ -115,8 +132,8 @@ impl From<String> for Data {
 	fn from(value: String) -> Self { Self::String(Cow::Owned(value)) }
 }
 
-impl From<Cow<'static, str>> for Data {
-	fn from(value: Cow<'static, str>) -> Self { Self::String(value) }
+impl From<SStr> for Data {
+	fn from(value: SStr) -> Self { Self::String(value) }
 }
 
 impl From<Id> for Data {
@@ -131,6 +148,10 @@ impl From<&str> for Data {
 	fn from(value: &str) -> Self { Self::String(Cow::Owned(value.to_owned())) }
 }
 
+impl PartialEq<bool> for Data {
+	fn eq(&self, other: &bool) -> bool { self.as_bool() == Some(*other) }
+}
+
 // --- Key
 #[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -140,7 +161,7 @@ pub enum DataKey {
 	#[serde(deserialize_with = "Self::deserialize_integer")]
 	Integer(i64),
 	Number(OrderedFloat<f64>),
-	String(Cow<'static, str>),
+	String(SStr),
 	Id(Id),
 	#[serde(skip_deserializing)]
 	Url(Url),
@@ -165,9 +186,9 @@ impl DataKey {
 	#[inline]
 	pub fn into_url(self) -> Option<Url> {
 		match self {
-			Self::String(s) => Url::try_from(s.as_ref()).ok(),
+			Self::String(s) => s.parse().ok(),
 			Self::Url(u) => Some(u),
-			Self::Bytes(b) => Url::try_from(b.as_slice()).ok(),
+			Self::Bytes(b) => b.as_slice().try_into().ok(),
 			_ => None,
 		}
 	}

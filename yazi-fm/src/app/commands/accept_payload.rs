@@ -1,15 +1,19 @@
+use anyhow::{Result, bail};
 use mlua::IntoLua;
 use tracing::error;
+use yazi_actor::lives::Lives;
+use yazi_binding::runtime_mut;
 use yazi_dds::{LOCAL, Payload, REMOTE};
-use yazi_plugin::{LUA, runtime_mut};
-use yazi_shared::event::CmdCow;
+use yazi_macro::succ;
+use yazi_plugin::LUA;
+use yazi_shared::event::{CmdCow, Data};
 
-use crate::{app::App, lives::Lives};
+use crate::app::App;
 
 impl App {
-	pub(crate) fn accept_payload(&mut self, mut cmd: CmdCow) {
-		let Some(payload) = cmd.take_any::<Payload>("payload") else {
-			return;
+	pub(crate) fn accept_payload(&self, mut c: CmdCow) -> Result<Data> {
+		let Some(payload) = c.take_any2::<Payload>("payload").transpose()? else {
+			bail!("'payload' is required for accept_payload");
 		};
 
 		let kind = payload.body.kind().to_owned();
@@ -19,12 +23,10 @@ impl App {
 			LOCAL.read()
 		};
 
-		let Some(handlers) = lock.get(&kind).filter(|&m| !m.is_empty()).cloned() else {
-			return;
-		};
+		let Some(handlers) = lock.get(&kind).filter(|&m| !m.is_empty()).cloned() else { succ!() };
 		drop(lock);
 
-		_ = Lives::scope(&self.cx, || {
+		succ!(Lives::scope(&self.core, || {
 			let body = payload.body.into_lua(&LUA)?;
 			for (id, cb) in handlers {
 				runtime_mut!(LUA)?.push(&id);
@@ -34,6 +36,6 @@ impl App {
 				runtime_mut!(LUA)?.pop();
 			}
 			Ok(())
-		});
+		})?);
 	}
 }

@@ -1,10 +1,10 @@
-use std::{collections::{HashMap, HashSet}, mem, ops::{Deref, Not}};
+use std::{collections::{HashMap, HashSet}, mem, ops::{Deref, DerefMut, Not}};
 
-use tokio::{fs::{self, DirEntry}, select, sync::mpsc::{self, UnboundedReceiver}};
+use tokio::{select, sync::mpsc::{self, UnboundedReceiver}};
 use yazi_shared::{Id, url::{Url, Urn, UrnBuf}};
 
 use super::{FilesSorter, Filter};
-use crate::{FILES_TICKET, File, FilesOp, SortBy, cha::Cha, mounts::PARTITIONS};
+use crate::{FILES_TICKET, File, FilesOp, SortBy, cha::Cha, mounts::PARTITIONS, provider::{self, DirEntry}};
 
 #[derive(Default)]
 pub struct Files {
@@ -27,11 +27,15 @@ impl Deref for Files {
 	fn deref(&self) -> &Self::Target { &self.items }
 }
 
+impl DerefMut for Files {
+	fn deref_mut(&mut self) -> &mut Self::Target { &mut self.items }
+}
+
 impl Files {
 	pub fn new(show_hidden: bool) -> Self { Self { show_hidden, ..Default::default() } }
 
 	pub async fn from_dir(dir: &Url) -> std::io::Result<UnboundedReceiver<File>> {
-		let mut it = fs::read_dir(dir).await?;
+		let mut it = provider::read_dir(dir).await?;
 		let (tx, rx) = mpsc::unbounded_channel();
 
 		tokio::spawn(async move {
@@ -39,7 +43,7 @@ impl Files {
 				select! {
 					_ = tx.closed() => break,
 					result = item.metadata() => {
-						let url = Url::from(item.path());
+						let url = item.url();
 						_ = tx.send(match result {
 							Ok(meta) => File::from_follow(url, meta).await,
 							Err(_) => File::from_dummy(url, item.file_type().await.ok())
@@ -52,7 +56,7 @@ impl Files {
 	}
 
 	pub async fn from_dir_bulk(dir: &Url) -> std::io::Result<Vec<File>> {
-		let mut it = fs::read_dir(dir).await?;
+		let mut it = provider::read_dir(dir).await?;
 		let mut entries = Vec::with_capacity(5000);
 		while let Ok(Some(entry)) = it.next_entry().await {
 			entries.push(entry);
@@ -63,7 +67,7 @@ impl Files {
 		async fn go(entries: &[DirEntry]) -> Vec<File> {
 			let mut files = Vec::with_capacity(entries.len());
 			for entry in entries {
-				let url = Url::from(entry.path());
+				let url = entry.url();
 				files.push(match entry.metadata().await {
 					Ok(meta) => File::from_follow(url, meta).await,
 					Err(_) => File::from_dummy(url, entry.file_type().await.ok()),

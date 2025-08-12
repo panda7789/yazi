@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use mlua::{ExternalResult, Function, IntoLua, Lua, MetaMethod, MultiValue, ObjectLike, Table, Value};
+use yazi_binding::runtime_mut;
 
 use super::LOADER;
-use crate::runtime_mut;
 
 pub(super) struct Require;
 
@@ -63,7 +63,7 @@ impl Require {
 		])?;
 
 		let ts = lua.create_table_from([("__mod", r#mod)])?;
-		ts.set_metatable(Some(mt));
+		ts.set_metatable(Some(mt))?;
 		Ok(ts)
 	}
 

@@ -15,32 +15,24 @@ macro_rules! emit {
 }
 
 #[macro_export]
-macro_rules! render {
-	() => {
-		yazi_shared::event::NEED_RENDER.store(true, std::sync::atomic::Ordering::Relaxed);
+macro_rules! relay {
+	($layer:ident : $name:ident) => {
+		yazi_shared::event::Cmd::new_relay(concat!(stringify!($layer), ":", stringify!($name)))
 	};
-	($cond:expr) => {
-		if $cond {
-			render!();
-		}
+	($layer:ident : $name:ident, $args:expr) => {
+		yazi_shared::event::Cmd::new_relay_args(
+			concat!(stringify!($layer), ":", stringify!($name)),
+			$args,
+		)
 	};
-	($left:expr, > $right:expr) => {{
-		let val = $left;
-		if val > $right {
-			render!();
-		}
-		val
-	}};
 }
 
 #[macro_export]
-macro_rules! render_and {
-	($cond:expr) => {
-		if $cond {
-			yazi_macro::render!();
-			true
-		} else {
-			false
-		}
+macro_rules! succ {
+	($data:expr) => {
+		return Ok(yazi_shared::event::Data::from($data))
+	};
+	() => {
+		return Ok(yazi_shared::event::Data::Nil)
 	};
 }

@@ -3,13 +3,15 @@ use std::{str::FromStr, time::Duration};
 use mlua::{ExternalError, ExternalResult, Function, IntoLuaMulti, Lua, Table, Value};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
+use yazi_binding::{deprecate, elements::{Line, Pos, Text}};
 use yazi_config::{keymap::{Chord, Key}, popup::{ConfirmCfg, InputCfg}};
-use yazi_macro::emit;
-use yazi_proxy::{AppProxy, ConfirmProxy, InputProxy};
-use yazi_shared::{Debounce, event::Cmd};
+use yazi_macro::relay;
+use yazi_parser::which::ShowOpt;
+use yazi_proxy::{AppProxy, ConfirmProxy, InputProxy, WhichProxy};
+use yazi_shared::Debounce;
 
 use super::Utils;
-use crate::{bindings::InputRx, deprecate, elements::{Line, Pos, Text}};
+use crate::bindings::InputRx;
 
 impl Utils {
 	pub(super) fn which(lua: &Lua) -> mlua::Result<Function> {
@@ -21,18 +23,14 @@ impl Utils {
 				let cand = cand?;
 				cands.push(Chord {
 					on:    Self::parse_keys(cand.raw_get("on")?)?,
-					run:   vec![Cmd::args("which:callback", [i]).with_any("tx", tx.clone())],
+					run:   vec![relay!(which:callback, [i]).with_any("tx", tx.clone())],
 					desc:  cand.raw_get("desc").ok(),
 					r#for: None,
 				});
 			}
 
 			drop(tx);
-			emit!(Call(
-				Cmd::new("which:show")
-					.with_any("candidates", cands)
-					.with("silent", t.raw_get::<bool>("silent").unwrap_or_default())
-			));
+			WhichProxy::show(ShowOpt { cands, silent: t.raw_get("silent").unwrap_or_default() });
 
 			Ok(rx.recv().await.map(|idx| idx + 1))
 		})
@@ -44,10 +42,7 @@ impl Utils {
 			if pos.is_nil() {
 				pos = t.raw_get("position")?;
 				if !pos.is_nil() {
-					deprecate!(
-						lua,
-						"The `position` property of `ya.input()` is deprecated, use `pos` instead in your {}\nSee #2921 for more details: https://github.com/sxyazi/yazi/pull/2921"
-					);
+					deprecate!(lua, "The `position` property of `ya.input()` is deprecated, use `pos` instead in your {}\nSee #2921 for more details: https://github.com/sxyazi/yazi/pull/2921");
 				}
 			}
 

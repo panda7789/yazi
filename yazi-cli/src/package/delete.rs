@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
-use tokio::fs;
-use yazi_fs::{maybe_exists, ok_or_not_found, remove_dir_clean, remove_sealed};
+use yazi_fs::{ok_or_not_found, provider::local::Local, remove_dir_clean};
 use yazi_macro::outln;
 
 use super::Dependency;
+use crate::shared::{maybe_exists, remove_sealed};
 
 impl Dependency {
 	pub(super) async fn delete(&self) -> Result<()> {
@@ -23,7 +23,7 @@ impl Dependency {
 
 	pub(super) async fn delete_assets(&self) -> Result<()> {
 		let assets = self.target().join("assets");
-		match fs::read_dir(&assets).await {
+		match Local::read_dir(&assets).await {
 			Ok(mut it) => {
 				while let Some(entry) = it.next_entry().await? {
 					remove_sealed(&entry.path())
@@ -35,7 +35,7 @@ impl Dependency {
 			Err(e) => Err(e).context(format!("failed to read `{}`", assets.display()))?,
 		};
 
-		remove_dir_clean(&assets).await;
+		remove_dir_clean(&assets.into()).await;
 		Ok(())
 	}
 
@@ -52,7 +52,7 @@ impl Dependency {
 				.with_context(|| format!("failed to delete `{}`", p.display()))?;
 		}
 
-		if ok_or_not_found(fs::remove_dir(&dir).await).is_ok() {
+		if ok_or_not_found(Local::remove_dir(&dir).await).is_ok() {
 			outln!("Done!")?;
 		} else {
 			outln!(
